@@ -1,0 +1,43 @@
+name: EBO Air 2
+version: "0.9.2"
+slug: ebo_air2
+description: Control and telemetry for the Enabot EBO Air 2 in Home Assistant (via Enabot cloud)
+url: https://github.com/Playcolors-co/ha-enabot
+# Reverse-engineered, unofficial, undocumented cloud API: mark as experimental.
+stage: experimental
+# The Agora SDK is built for x86_64 (glibc) only. HAOS on Proxmox/NUC is amd64.
+arch:
+  - amd64
+startup: application
+boot: auto
+# RTSP video stream (Generic Camera): expose the port so HA can reach rtsp://<host>:8554/ebo
+ports:
+  8554/tcp: 8554
+ports_description:
+  8554/tcp: "RTSP video stream — add a Generic Camera at rtsp://<HA-IP>:8554/ebo"
+# Our base is python:3.11-slim (not an HA base image with s6): disable HA init.
+init: false
+# Request the Supervisor MQTT service: the broker credentials are provided automatically.
+services:
+  - mqtt:need
+# Allow querying the Supervisor for the host IP (to show the exact RTSP camera URL).
+hassio_api: true
+# Options exposed in the add-on UI
+options:
+  email: ""
+  password: ""
+  region: "GB"
+  host: "ebox-eu.enabotserverintl.com"
+  robot_id: 0
+  video: false
+  video_encoded: false
+  host_ip: ""
+schema:
+  email: str
+  password: password
+  region: str
+  host: str?
+  robot_id: int?
+  video: bool?
+  video_encoded: bool?
+  host_ip: str?

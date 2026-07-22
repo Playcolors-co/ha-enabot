@@ -1,0 +1,7 @@
+# Base image per architecture. Debian/glibc python is required by the Agora SDK
+# (its .so files are glibc, not musl/alpine). Full registry path so HA accepts it.
+build_from:
+  amd64: docker.io/library/python:3.11-slim
+labels:
+  org.opencontainers.image.title: "EBO Air 2"
+  org.opencontainers.image.source: "https://github.com/Playcolors-co/ha-enabot"
