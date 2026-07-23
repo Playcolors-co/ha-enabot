@@ -43,9 +43,9 @@ No phone, no emulator.
 |--------|------|
 | battery, wifi, SD space | sensor |
 | charging, recording | binary_sensor |
-| laser, sleep, camera | switch |
+| laser, sleep, camera, connected, motion recording, auto-record calls, cloud upload | switch |
 | camera URL (RTSP link) | sensor |
-| speed (1–100), volume (0–100) | number |
+| speed (1–100), volume (0–100), talkback volume (0–100) | number |
 | say (text-to-speech) | text |
 | patrol route | select |
 | forward / back / left / right / stop, return to base, start patrol | button |

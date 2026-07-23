@@ -1,5 +1,5 @@
 name: EBO Air 2
-version: "0.9.2"
+version: "0.13.5"
 slug: ebo_air2
 description: Control and telemetry for the Enabot EBO Air 2 in Home Assistant (via Enabot cloud)
 url: https://github.com/Playcolors-co/ha-enabot
@@ -30,8 +30,12 @@ options:
   host: "ebox-eu.enabotserverintl.com"
   robot_id: 0
   video: false
+  audio: false
   video_encoded: false
+  video_max_height: 720
+  video_preset: "ultrafast"
   host_ip: ""
+  log_level: "info"
 schema:
   email: str
   password: password
@@ -39,5 +43,9 @@ schema:
   host: str?
   robot_id: int?
   video: bool?
+  audio: bool?
   video_encoded: bool?
+  video_max_height: int?
+  video_preset: list(ultrafast|superfast|veryfast|faster|fast)?
   host_ip: str?
+  log_level: list(debug|info|warning)?

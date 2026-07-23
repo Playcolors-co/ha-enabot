@@ -20,6 +20,10 @@
 | `robot_id` | `0` = auto-discovery. Set an id only if you have more than one robot |
 | `video` | startup state of the **EBO camera** switch. `false` (default) = camera off at start, so the robot is **not** kept in video mode. You can turn it on anytime from the switch. |
 | `video_encoded` | **experimental.** `true` makes the camera use the encoded-H.265 path (may crash the Agora SDK; if it does, the add-on auto-falls back to control-only). Leave `false`. |
+| `audio` | **experimental.** `true` adds the robot's microphone audio to the camera stream (listen-only, AAC). Optional — leave `false` if you only want video. |
+| `video_max_height` | downscale the re-encoded stream to this height to save CPU (native is ~1296p). `720` (default) is a good balance; `0` = keep native resolution. |
+| `video_preset` | libx264 speed/quality preset: `ultrafast` (default, lowest CPU) … `fast`. Slower presets look a bit better but use more CPU. |
+| `log_level` | add-on log verbosity: `info` (default, clean) shows key events; `debug` adds chatty lines (per-N-frames…); `warning` shows only problems. |
 | `host_ip` | optional. The IP of your Home Assistant machine, used to build the RTSP camera URL. Leave empty to auto-detect; set it (e.g. `192.168.88.15`) if the URL shows `<HOME-ASSISTANT-IP>`. |
 
 Your credentials stay in the add-on configuration (in HA) and are sent only to Enabot's
