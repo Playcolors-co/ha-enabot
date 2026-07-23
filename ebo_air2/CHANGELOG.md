@@ -1,5 +1,69 @@
 # Changelog — Enabot integration
 
+## 0.13.5 — finer driving + joystick channel
+- **Gentler move buttons** (A): each tap is a shorter, smaller nudge — turns no longer spin
+  ~90° per press, forward/back are softer.
+- **Joystick channel** (B): new MQTT topic `ebo_air2/joystick` accepting `{"x":-1..1,"y":-1..1}`
+  for smooth, continuous driving from a joystick card (x = turn, y = forward). Pair it with the
+  EBO joystick Lovelace card. (Cloud latency still applies.)
+
+## 0.13.4 — much lower video latency
+- The stream lagged because ffmpeg was forced to 15 fps (`-r`/`-vsync cfr`) while the robot
+  sends ~25 fps → it buffered and dropped frames. Now it passes the real frame rate through
+  with arrival timestamps + low-delay flags: **latency should drop a lot** (clean DTS kept).
+- For the lowest latency/CPU use `video_preset: ultrafast` and a lower `video_max_height`.
+
+## 0.13.3 — audio no longer breaks video
+- With `audio: true`, ffmpeg had a second (audio) input; if the robot's PCM didn't arrive it
+  **stalled the whole mux and froze the video**. Fixed: (1) the audio observer is now kept
+  referenced (it was garbage-collected, so it never fired), and (2) the pipeline feeds
+  **silence** when no real audio arrives, so ffmpeg never blocks — **video always flows**,
+  with audio overlaid when the robot sends it.
+
+## 0.13.2 — quieter log + log level
+- New **`log_level`** option: `info` (default) shows key events only — no more `N frames
+  received` spam; `debug` for the chatty lines; `warning` for problems only. Video keeps a
+  light "still streaming" heartbeat every few minutes at info level.
+
+## 0.13.1 — audio fix + diagnostics
+- Audio didn't work because a required SDK call was missing:
+  `set_playback_audio_frame_before_mixing_parameters(1, 16000)` — without it the PCM callback
+  never fires. Added it (+ `audio_recv_media_packet=0`). The log now shows
+  `[audio] first PCM frame from …` when audio is flowing.
+- Silenced transient template warnings on the new entities (defaults).
+
+## 0.13.0 — audio (listen), experimental
+- Optional **audio**: the robot's microphone (16 kHz mono PCM from the SDK) is muxed into the
+  camera stream as AAC, so the Generic Camera has **sound**. Enable with `audio: true` (needs
+  `video: true`). Off by default; if it ever misbehaves the safety net falls back to
+  control-only. Two-way *talk* is a separate future step.
+
+## 0.12.1 — camera stream: fix timestamps ("No dts")
+- The re-encoded stream could produce timestamps HA's stream backend rejected ("No dts in N
+  consecutive packets"). ffmpeg now timestamps incoming frames by arrival
+  (`use_wallclock_as_timestamps`) and forces a constant output rate (`-r`, CFR), giving clean
+  monotonic DTS/PTS. (The `Connection refused`/`404` errors were just the add-on being down
+  during the update — transient.)
+
+## 0.12.0 — "connected" switch + CI
+- **EBO connected** switch (default on): turn it **off** to fully leave the cloud session so
+  the robot can **sleep** (no control/telemetry while off); turn it back on to reconnect. MQTT
+  entities stay available throughout.
+- **CI:** a GitHub Actions workflow builds the add-on image on every push/PR, so build breaks
+  are caught before release.
+
+## 0.11.0 — more entities
+- New controls (verified against the app): **motion recording** (switch), **auto-record calls**
+  (switch), **cloud upload** (switch, privacy), **talkback volume** (number). The recording/
+  volume ones show real state from the robot's settings report.
+- Eyes/emoji, DND and other complex settings stay on the raw `ebo_air2/cmd` channel (they need
+  structured payloads) — see COMANDI.md.
+
+## 0.10.0 — video CPU: resolution/quality options
+- The robot streams ~2304×1296 (2K); re-encoding that is CPU-heavy on a NUC. New options:
+  `video_max_height` (default **720** — big CPU saving; set `0` for native 2K) and
+  `video_preset` (libx264 speed/quality). The log shows the chosen resolution/preset.
+
 ## 0.9.2 — video works: fix client attach (keyframes)
 - 🎉 Live video works (H.265 decoded by the SDK → re-encoded to H.264 → RTSP). Fixed the
   "Timeout while loading URL" when adding the camera: ffmpeg now emits a **keyframe every ~2s**

@@ -71,6 +71,10 @@ OP_LASER = 103051
 OP_SAY = 103501         # text-to-speech: {"userId":..,"text":".."} — robot speaks
 OP_SLEEP = 101047       # sleep/wake: {"isSleeping": bool} — no movement
 OP_VOLUME = 102023      # {"playbackVolume": int, "isPlaybackMuted": bool}
+OP_SPORTS_REC = 101049  # motion recording: {"sportsRecord": bool}
+OP_CALL_REC = 103071    # auto-record calls: {"callAutoRecording": int 0/1}
+OP_UPLOAD_CLOUD = 104099  # upload recordings to cloud: {"videoUploadCloud": bool}
+OP_TALKBACK_VOL = 102031  # {"talkbackVolume": int 0..100}
 OP_MOVE_MODE = 103011   # {"moveMode": int}
 OP_SHOOT_MODE = 102035  # {"shootMode": int}  (photo/video)
 OP_PLAY_MOTION = 103005  # {"cycleMode": int, "moveId": int} — preset motion (MOVES)
@@ -114,8 +118,10 @@ class Bridge:
         self.mqtt_conf = mqtt_conf
         self.video = None
         self.video_enabled = os.environ.get("EBO_VIDEO", "1") == "1"
+        self.audio_enabled = os.environ.get("EBO_AUDIO", "0") == "1"   # listen (optional)
         self.rtsp_port = int(os.environ.get("EBO_RTSP_PORT", "8554"))
         self.robot_uid = None            # the robot's RTC uid, learned on_user_joined
+        self.connected = True            # master session switch: off => robot can sleep
         # runtime camera switch: controls whether we re-publish the robot's video as RTSP.
         # (control needs RTC presence, but we only subscribe to the robot's video — which is
         # what puts it in video mode — when the user turns the camera switch on.)
@@ -184,12 +190,19 @@ class Bridge:
         # Decoded video path: auto-subscribe so the SDK DECODES the robot's H.265 to raw YUV
         # (this build decodes H.265 but its *encoded* observer segfaults). We re-encode the YUV
         # to H.264 for RTSP. auto_subscribe_video=1 is the stable config.
-        ccfg = RTCConnConfig(
-            auto_subscribe_audio=0,
+        ccfg_kw = dict(
+            auto_subscribe_audio=1 if self.audio_enabled else 0,
             auto_subscribe_video=1 if self.video_enabled else 0,
             client_role_type=ClientRoleType.CLIENT_ROLE_BROADCASTER,
             channel_profile=ChannelProfileType.CHANNEL_PROFILE_LIVE_BROADCASTING,
         )
+        if self.audio_enabled:
+            from agora.rtc.agora_base import AudioSubscriptionOptions
+            ccfg_kw["audio_recv_media_packet"] = 0
+            ccfg_kw["audio_subs_options"] = AudioSubscriptionOptions(
+                packet_only=0, pcm_data_only=1, bytes_per_sample=2,
+                number_of_channels=1, sample_rate_hz=16000)
+        ccfg = RTCConnConfig(**ccfg_kw)
         pcfg = RtcConnectionPublishConfig(is_publish_audio=False, is_publish_video=False)
         self.rtc = svc.create_rtc_connection(ccfg, pcfg)
         self.rtc.register_observer(RtcObs())
@@ -223,8 +236,40 @@ class Bridge:
                 self.rtc.register_video_frame_observer(self.video)
                 self._observers_registered = True
                 log("[video] decoded (YUV) video observer registered")
+                if self.audio_enabled:
+                    self._register_audio_observer()
             except Exception as e:
                 log("[video] pipeline setup failed:", e)
+
+    def _register_audio_observer(self):
+        try:
+            from agora.rtc.audio_frame_observer import IAudioFrameObserver
+            pipeline = self.video
+            lu = self.rtc.get_local_user()
+            # REQUIRED: without this the before-mixing callback never fires (1 ch, 16 kHz)
+            try:
+                lu.set_playback_audio_frame_before_mixing_parameters(1, 16000)
+            except Exception as e:
+                log("[audio] set params failed:", e)
+
+            class AudioObs(IAudioFrameObserver):
+                _n = [0]
+
+                def on_playback_audio_frame_before_mixing(o, l, ch, uid, frame,
+                                                          vad_state=0, vad_bytes=None):
+                    try:
+                        o._n[0] += 1
+                        if o._n[0] == 1:
+                            log("[audio] first PCM frame from %s" % uid)
+                        pipeline.write_audio(frame.buffer)
+                    except Exception:
+                        pass
+                    return 0
+            self._audio_obs = AudioObs()   # keep a reference (else it's GC'd, no callbacks)
+            self.rtc.register_audio_frame_observer(self._audio_obs, 0, None)
+            log("[audio] PCM observer registered (listen)")
+        except Exception as e:
+            log("[audio] observer registration failed:", e)
 
     def _camera_feed(self, on):
         """Turn our RTSP feed on/off. The robot streams whenever we're present in RTC; this
@@ -270,6 +315,51 @@ class Bridge:
         self._camera_feed(on)
         self._publish_camera_state()
 
+    def set_connected(self, on):
+        """Master session switch. OFF: leave the Agora session so the robot can sleep (no
+        control/telemetry). ON: reconnect. MQTT/entities stay up throughout."""
+        if on == self.connected:
+            self._publish_conn_state()
+            return
+        if on:
+            self.connected = True
+            log("[*] connecting session…")
+            try:
+                self.connect_agora()
+                self.send(OP_HANDSHAKE, {"userId": self.account})
+                time.sleep(1)
+                self.send(OP_GET_SETTINGS)
+                self.send(OP_GET_ROUTES)
+            except Exception as e:
+                log("[!] reconnect failed:", e)
+        else:
+            self.connected = False
+            log("[*] disconnecting session — robot can sleep")
+            try:
+                if self.video:
+                    self.video.stop_feed()
+            except Exception:
+                pass
+            try:
+                if self.rtc:
+                    self.rtc.disconnect()
+            except Exception:
+                pass
+            try:
+                if self.rtm:
+                    self.rtm.logout()
+            except Exception:
+                pass
+            self.rtm = None
+            self.rtc = None
+            self._observers_registered = False
+        self._publish_conn_state()
+
+    def _publish_conn_state(self):
+        if self.mqtt:
+            self.mqtt.publish("%s/connected/state" % NODE,
+                              "on" if self.connected else "off", retain=True)
+
     def _opts(self):
         return PublishOptions(
             channel_type=RtmChannelType.RTM_CHANNEL_TYPE_USER,
@@ -277,13 +367,19 @@ class Bridge:
         )
 
     def send(self, mid, data=None):
+        if not (self.connected and self.rtm):   # the "connected" switch is off
+            return
         msg = {"id": mid, "type": 0, "timestamp": time.time() * 1000}
         if self.sid:
             msg["sid"] = self.sid
         if data is not None:
             msg["data"] = data
         payload = json.dumps(msg, separators=(",", ":")).encode()
-        r, _ = self.rtm.publish(self.s["robot_rtm"], payload, self._opts())
+        try:
+            r, _ = self.rtm.publish(self.s["robot_rtm"], payload, self._opts())
+        except Exception as e:
+            log("[!] publish %s error: %s" % (mid, e))
+            return
         if r != 0:
             log("[!] publish %s failed: %s" % (mid, self.rtm.get_error_reason(r)))
 
@@ -494,6 +590,30 @@ class Bridge:
             "name": "EBO volume", "command_topic": "%s/volume/set" % NODE,
             "min": 0, "max": 100, "step": 1, "optimistic": True,
             "icon": "mdi:volume-high"})
+        # talkback (mic) volume — has real state from settings
+        self._disc("number", "talkback_volume", {
+            "name": "EBO talkback volume", "command_topic": "%s/talkback_volume/set" % NODE,
+            "state_topic": st, "value_template": "{{ value_json.talkback_volume | default('') }}",
+            "min": 0, "max": 100, "step": 1, "icon": "mdi:microphone"})
+        # motion recording (records when it detects movement)
+        self._disc("switch", "sports_record", {
+            "name": "EBO motion recording", "state_topic": st,
+            "value_template": "{{ value_json.sports_record | default('false') }}",
+            "command_topic": "%s/sports_record/set" % NODE,
+            "payload_on": "on", "payload_off": "off", "state_on": "true", "state_off": "false",
+            "icon": "mdi:motion-sensor"})
+        # auto-record calls
+        self._disc("switch", "call_rec", {
+            "name": "EBO auto-record calls", "state_topic": st,
+            "value_template": "{{ value_json.call_rec | default('false') }}",
+            "command_topic": "%s/call_rec/set" % NODE,
+            "payload_on": "on", "payload_off": "off", "state_on": "true", "state_off": "false",
+            "icon": "mdi:record-rec"})
+        # upload recordings to the cloud (privacy) — optimistic (not in the status report)
+        self._disc("switch", "upload_cloud", {
+            "name": "EBO cloud upload", "command_topic": "%s/upload_cloud/set" % NODE,
+            "payload_on": "on", "payload_off": "off", "optimistic": True,
+            "icon": "mdi:cloud-upload"})
         # return to base (only works when the robot is away from the dock / not charging)
         self._disc("button", "dock", {
             "name": "EBO return to base", "command_topic": "%s/dock" % NODE,
@@ -507,6 +627,11 @@ class Bridge:
         self._disc("sensor", "camera_url", {
             "name": "EBO camera URL", "state_topic": "%s/camera/url" % NODE,
             "icon": "mdi:link-variant", "entity_category": "diagnostic"})
+        # master session switch: OFF disconnects from the cloud so the robot can sleep
+        self._disc("switch", "connected", {
+            "name": "EBO connected", "command_topic": "%s/connected/set" % NODE,
+            "state_topic": "%s/connected/state" % NODE,
+            "payload_on": "on", "payload_off": "off", "icon": "mdi:lan-connect"})
         # patrol: pick a route (auto = no route) and start it
         self._publish_patrol_select()
         self._disc("button", "patrol_start", {
@@ -518,14 +643,21 @@ class Bridge:
         c.subscribe("%s/move/+" % NODE)
         # canale generico per un agente: JSON {"ly":-50,"rx":0,"hold":1.0}
         c.subscribe("%s/move/vector" % NODE)
+        c.subscribe("%s/joystick" % NODE)      # {"x":-1..1,"y":-1..1} from a joystick card
         c.subscribe("%s/sleep/set" % NODE)
         c.subscribe("%s/say" % NODE)
         c.subscribe("%s/volume/set" % NODE)
+        c.subscribe("%s/talkback_volume/set" % NODE)
+        c.subscribe("%s/sports_record/set" % NODE)
+        c.subscribe("%s/call_rec/set" % NODE)
+        c.subscribe("%s/upload_cloud/set" % NODE)
         c.subscribe("%s/dock" % NODE)
         c.subscribe("%s/patrol/route/set" % NODE)
         c.subscribe("%s/patrol/start" % NODE)
         c.subscribe("%s/camera/set" % NODE)
+        c.subscribe("%s/connected/set" % NODE)
         self._publish_camera_state()
+        self._publish_conn_state()
         # RAW escape hatch for an AI/automation: publish {"id":<opcode>,"data":{...}}
         # to ebo_air2/cmd to send ANY command from the full catalog (docs/COMANDI.md).
         c.subscribe("%s/cmd" % NODE)
@@ -551,6 +683,17 @@ class Bridge:
             elif topic.endswith("/volume/set"):
                 self.send(OP_VOLUME, {"playbackVolume": int(float(payload)),
                                       "isPlaybackMuted": False})
+            elif topic.endswith("/talkback_volume/set"):
+                self.send(OP_TALKBACK_VOL, {"talkbackVolume": int(float(payload))})
+            elif topic.endswith("/sports_record/set"):
+                self.send(OP_SPORTS_REC,
+                          {"sportsRecord": payload.lower() in ("on", "true", "1")})
+            elif topic.endswith("/call_rec/set"):
+                self.send(OP_CALL_REC,
+                          {"callAutoRecording": 1 if payload.lower() in ("on", "true", "1") else 0})
+            elif topic.endswith("/upload_cloud/set"):
+                self.send(OP_UPLOAD_CLOUD,
+                          {"videoUploadCloud": payload.lower() in ("on", "true", "1")})
             elif topic.endswith("/dock"):
                 # start returning to the charging base (no-op if already charging)
                 self.send(OP_DOCK, {"startUp": True})
@@ -561,22 +704,34 @@ class Bridge:
                 self._start_patrol()
             elif topic.endswith("/camera/set"):
                 self.set_camera(payload.lower() in ("on", "true", "1"))
+            elif topic.endswith("/connected/set"):
+                self.set_connected(payload.lower() in ("on", "true", "1"))
             elif topic.endswith("/cmd"):
                 # raw command from an AI/automation: {"id":<opcode>,"data":{...}}
                 obj = json.loads(payload)
                 mid = int(obj["id"])
                 self.send(mid, obj.get("data"))
                 log("[MQTT] raw cmd id=%s sent" % mid)
+            elif topic.endswith("/joystick"):
+                # continuous control: {"x":-1..1,"y":-1..1} from a joystick card.
+                # x = turn (right +), y = forward (+). Held ~0.4s; the card resends while
+                # dragging, the watchdog stops it on release.
+                j = json.loads(payload)
+                x = max(-1.0, min(1.0, float(j.get("x", 0))))
+                y = max(-1.0, min(1.0, float(j.get("y", 0))))
+                self.set_move(0, int(-y * 100), int(x * 100), hold=0.4)
             elif "/move/" in topic:
                 d = topic.rsplit("/", 1)[-1]
-                mag = 60
+                # gentle nudges for the buttons: forward/back softer, turns smaller so
+                # left/right don't spin ~90° each tap.
+                mv, tn = 50, 35
                 mapping = {
-                    "forward": (0, -mag, 0), "back": (0, mag, 0),
-                    "left": (0, 0, -mag), "right": (0, 0, mag), "stop": (0, 0, 0),
+                    "forward": (0, -mv, 0), "back": (0, mv, 0),
+                    "left": (0, 0, -tn), "right": (0, 0, tn), "stop": (0, 0, 0),
                 }
                 if d in mapping:
                     lx, ly, rx = mapping[d]
-                    self.set_move(lx, ly, rx, hold=0.8)
+                    self.set_move(lx, ly, rx, hold=0.35)
         except Exception as e:
             log("[MQTT] command error %s: %s" % (topic, e))
 
@@ -593,6 +748,9 @@ class Bridge:
             "recording": "true" if stt.get("isVideoRecording") else "false",
             "laser": "true" if stt.get("laserStatus") else "false",
             "speed": self.settings.get("moveSpeed"),
+            "talkback_volume": self.settings.get("talkbackVolume"),
+            "sports_record": "true" if self.settings.get("sportsRecord") else "false",
+            "call_rec": "true" if self.settings.get("callAutoRecording") else "false",
         }
         self.mqtt.publish("%s/state" % NODE, json.dumps(payload), retain=True)
 
@@ -678,7 +836,7 @@ class Bridge:
                 if time.time() - last_check < 30:
                     continue
                 last_check = time.time()
-                if self.provider and not self._token_age_ok():
+                if self.connected and self.provider and not self._token_age_ok():
                     self.refresh_session()
                     # reconnect Agora with the new tokens
                     try:
