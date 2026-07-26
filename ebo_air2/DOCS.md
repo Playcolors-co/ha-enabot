@@ -52,6 +52,11 @@ keys:
 | `payload_key` | the app's AES login key (see above) |
 | `sign_key` | the app's HMAC signing key (see above) |
 
+> 💡 **Prefer to configure from the integration?** Install the companion
+> **[EBO integration](https://github.com/Playcolors-co/ha-enabot-integration)** (HACS) and enter
+> the account there — it writes these four fields into the add-on and starts it for you, so you
+> never touch this tab. Leave the fields blank if you go that route.
+
 ## The panel (sidebar)
 
 The add-on serves a **web panel** (like Zigbee2MQTT) — open it from the add-on's *Open Web UI* or
