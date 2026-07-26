@@ -51,8 +51,8 @@ ALLOWED_CMDS = {
 # Add-on settings the panel manages (stored in /data/panel.json, read by run.sh). Everything
 # except the account login (email/password) lives here now, not in the Configuration tab.
 EDITABLE_OPTS = {
-    "expose_mqtt": {"type": "bool", "default": True,
-                    "label": "Expose entities over MQTT (off = native integration only)"},
+    # NB: expose_mqtt now lives in the add-on options (Configuration tab / set by the integration),
+    # not here — so it can be provisioned by the Enabot integration via Supervisor.
     "video": {"type": "bool", "default": True, "label": "Video"},
     "audio": {"type": "bool", "default": True, "label": "Audio (listen — best-effort)"},
     "talk": {"type": "bool", "default": False, "label": "Talk (speak to the robot)"},

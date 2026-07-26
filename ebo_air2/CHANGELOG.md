@@ -1,5 +1,13 @@
 # Changelog — Enabot integration
 
+## 0.25.0 — configure from the integration + robots as distinct devices (not MQTT)
+- New add-on option **`expose_mqtt`** (default on for standalone use). The companion **EBO
+  integration** now provisions the add-on for you (Supervisor): you enter the account there and it
+  sets these options and starts the add-on — no need to touch the Configuration tab. It sets
+  `expose_mqtt: off`, so each robot appears as a **distinct native device** (camera + entities)
+  owned by the integration, instead of a set of MQTT entities. `expose_mqtt` moved out of the panel
+  into the add-on options (so the integration can drive it). Pairs with integration **v0.3.0**.
+
 ## 0.24.1 — clearly-unofficial branding + document the user-supplied keys
 - Renamed to **EBO for Home Assistant (unofficial)** (add-on, integration, panel, logo) to avoid
   looking official. Documented in DOCS how to supply the required app crypto keys (not shipped).

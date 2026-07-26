@@ -35,8 +35,10 @@ export EBO_VIDEO_MAX_HEIGHT="$(pget video_max_height 720)"
 export EBO_VIDEO_FPS="$(pget video_fps 20)"
 export EBO_VIDEO_BITRATE="$(pget video_bitrate 2500)"
 export EBO_VIDEO_PRESET="$(pget video_preset ultrafast)"
-# expose HA entities over MQTT discovery (on) or leave them to the native integration (off)
-export EBO_EXPOSE_MQTT="$(pbool expose_mqtt true)"
+# expose HA entities over MQTT discovery (on) or leave them to the native integration (off).
+# Driven by the add-on option so the Enabot integration can flip it via Supervisor; the robot's
+# integration-discovery message is published regardless, so native devices always appear.
+[ "$(jq -r '.expose_mqtt // true' "$OPTS")" = "false" ] && export EBO_EXPOSE_MQTT=0 || export EBO_EXPOSE_MQTT=1
 ROBOT_ID="$(pget robot_id 0)"
 [ "$ROBOT_ID" != "0" ] && export EBO_ROBOT_ID="$ROBOT_ID"
 

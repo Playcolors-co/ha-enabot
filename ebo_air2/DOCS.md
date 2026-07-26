@@ -78,11 +78,13 @@ the **EBO** sidebar entry. From one place you can:
 Each robot's entities (battery, Wi-Fi, charging, camera switch, wake/standby/laser/dock, video
 quality, speed, volume, eyes…) appear in Home Assistant in one of two ways:
 
-- **MQTT discovery** (default, `expose_mqtt: on`) — needs the *Mosquitto broker* add-on + the MQTT
-  integration. Entities appear automatically.
-- **Native integration** — install the companion **[EBO integration](https://github.com/Playcolors-co/ha-enabot-integration)**
-  from HACS: it creates a **device per robot** (named after the robot) with a **live camera** and
-  all entities, talking to the add-on directly. Set `expose_mqtt: off` to let it own everything.
+- **Native integration (recommended)** — install the companion **[EBO integration](https://github.com/Playcolors-co/ha-enabot-integration)**
+  from HACS: each robot becomes a **distinct device** (named after the robot) with a **live camera**
+  and all entities — *not* a bag of MQTT entities. When you set up through the integration it sets
+  `expose_mqtt: off` for you, so this is the default experience.
+- **MQTT discovery** (standalone add-on, `expose_mqtt: on`) — needs the *Mosquitto broker* add-on +
+  the MQTT integration; entities appear under the MQTT integration automatically. Use this only if
+  you don't install the companion integration.
 
 The **video** is a low-latency RTSP stream (H.265 → H.264) on port **8554**; via the native
 integration or go2rtc it plays as **WebRTC**. Turning the camera on **wakes** the robot from

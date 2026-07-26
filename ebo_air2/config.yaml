@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.24.1"
+version: "0.25.0"
 slug: ebo_air2
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
@@ -46,8 +46,12 @@ options:
   password: ""
   payload_key: ""
   sign_key: ""
+  expose_mqtt: true
 schema:
   email: str
   password: password
   payload_key: password
   sign_key: password
+  # on  = robots appear as MQTT-discovered entities (standalone add-on use)
+  # off = robots are owned as native devices by the Enabot integration (set for you by it)
+  expose_mqtt: bool?
