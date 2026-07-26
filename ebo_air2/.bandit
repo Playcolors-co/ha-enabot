@@ -1,0 +1,7 @@
+# B110 try/except/pass: intentional defensive cleanup in teardown/observers
+# B101 assert: only in ebo_sign.py __main__ regression check
+# B404/B603 subprocess: ffmpeg/mediamtx invoked with LIST args (no shell) — no injection
+# B107 hardcoded_password: false positive (app_token="" default is not a secret)
+[bandit]
+skips = B110,B101,B404,B603,B107
+exclude_dirs = ["./tests"]

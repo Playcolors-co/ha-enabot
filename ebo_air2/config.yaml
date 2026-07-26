@@ -1,7 +1,7 @@
-name: EBO Air 2
-version: "0.13.5"
+name: EBO for Home Assistant (unofficial)
+version: "0.24.1"
 slug: ebo_air2
-description: Control and telemetry for the Enabot EBO Air 2 in Home Assistant (via Enabot cloud)
+description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
 # Reverse-engineered, unofficial, undocumented cloud API: mark as experimental.
 stage: experimental
@@ -10,11 +10,21 @@ arch:
   - amd64
 startup: application
 boot: auto
-# RTSP video stream (Generic Camera): expose the port so HA can reach rtsp://<host>:8554/ebo
+# RTSP video (Generic Camera). 8554 = single robot / first robot; 8555-8557 = extra robots
+# when the account has more than one (one RTSP port per robot).
 ports:
   8554/tcp: 8554
+  8555/tcp: 8555
+  8556/tcp: 8556
+  8557/tcp: 8557
+  # data API for the native HA integration (token-guarded)
+  8098/tcp: 8098
 ports_description:
-  8554/tcp: "RTSP video stream — add a Generic Camera at rtsp://<HA-IP>:8554/ebo"
+  8554/tcp: "Camera video stream (robot 1) — internal, no need to change"
+  8555/tcp: "Camera video stream (robot 2, if any) — internal"
+  8556/tcp: "Camera video stream (robot 3, if any) — internal"
+  8557/tcp: "Camera video stream (robot 4, if any) — internal"
+  8098/tcp: "Data API for the Enabot integration — internal, no need to change"
 # Our base is python:3.11-slim (not an HA base image with s6): disable HA init.
 init: false
 # Request the Supervisor MQTT service: the broker credentials are provided automatically.
@@ -22,30 +32,22 @@ services:
   - mqtt:need
 # Allow querying the Supervisor for the host IP (to show the exact RTSP camera URL).
 hassio_api: true
-# Options exposed in the add-on UI
+# The Ingress panel edits this add-on's own options (log level, video quality…) and restarts it.
+hassio_role: manager
+# Sidebar web panel (Zigbee2MQTT-style): manage all robots from one place. Served via Ingress.
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:robot
+panel_title: EBO
+# Only the account login lives here; EVERYTHING else (region, host, video, audio, quality, log
+# level…) is managed from the Enabot panel and stored in /data/panel.json.
 options:
   email: ""
   password: ""
-  region: "GB"
-  host: "ebox-eu.enabotserverintl.com"
-  robot_id: 0
-  video: false
-  audio: false
-  video_encoded: false
-  video_max_height: 720
-  video_preset: "ultrafast"
-  host_ip: ""
-  log_level: "info"
+  payload_key: ""
+  sign_key: ""
 schema:
   email: str
   password: password
-  region: str
-  host: str?
-  robot_id: int?
-  video: bool?
-  audio: bool?
-  video_encoded: bool?
-  video_max_height: int?
-  video_preset: list(ultrafast|superfast|veryfast|faster|fast)?
-  host_ip: str?
-  log_level: list(debug|info|warning)?
+  payload_key: password
+  sign_key: password

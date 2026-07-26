@@ -10,6 +10,7 @@ rtsp://<add-on host>:8554/ebo.
 """
 import os
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -31,17 +32,23 @@ def _pack_plane(buf, stride, width, height):
 
 
 class VideoPipeline(IVideoFrameObserver):
-    def __init__(self, rtsp_port=8554, path="ebo", fps=25):
+    def __init__(self, rtsp_port=8554, path="ebo", fps=None):
         super().__init__()
         self.rtsp_port = rtsp_port
         self.rtsp_url = f"rtsp://127.0.0.1:{rtsp_port}/{path}"
-        self.fps = fps
+        # target output fps (configurable) — we DROP source frames to hit it, cutting encode CPU.
+        self.fps = int(fps or os.environ.get("EBO_VIDEO_FPS", "20") or "20")
+        self.src_fps = int(os.environ.get("EBO_VIDEO_SRC_FPS", "25") or "25")  # robot's ~rate
+        self._dec_acc = 0                 # frame-decimation accumulator
+        # bitrate cap in kbps (VBV) so busy scenes can't spike bandwidth/CPU (0 = uncapped)
+        self.bitrate = int(os.environ.get("EBO_VIDEO_BITRATE", "2500") or "0")
         # downscale to cut CPU on the re-encode (0 = keep the robot's native resolution)
         self.max_h = int(os.environ.get("EBO_VIDEO_MAX_HEIGHT", "720") or "0")
         self.preset = os.environ.get("EBO_VIDEO_PRESET", "ultrafast")
         # optional audio (listen): 16 kHz mono PCM from the SDK, muxed as AAC (default off)
         self.audio = os.environ.get("EBO_AUDIO", "0") == "1"
-        self.audio_rate = 16000
+        # robot mic is 8 kHz mono (measured on the real app); must match the SDK PCM rate
+        self.audio_rate = int(os.environ.get("EBO_AUDIO_RATE", "8000"))
         self._a_w = None              # write end of the audio pipe to ffmpeg
         self._audio_lock = threading.Lock()
         self._last_audio = 0.0        # last time real PCM arrived
@@ -55,7 +62,9 @@ class VideoPipeline(IVideoFrameObserver):
 
     # ---- RTSP server ----
     def _start_mediamtx(self):
-        cfg = "/tmp/mediamtx.yml"
+        # per-instance temp file: a fixed /tmp path would (a) be a predictable-path smell and
+        # (b) COLLIDE when the add-on runs one bridge per robot (multi-robot). Key it by port.
+        cfg = os.path.join(tempfile.gettempdir(), "ebo_mediamtx_%d.yml" % self.rtsp_port)
         with open(cfg, "w") as f:
             f.write("logLevel: error\n"
                     f"rtspAddress: :{self.rtsp_port}\n"
@@ -106,7 +115,11 @@ class VideoPipeline(IVideoFrameObserver):
             "-c:v", "libx264", "-preset", self.preset, "-tune", "zerolatency",
             "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0", "-bf", "0",
             "-pix_fmt", "yuv420p",
-        ] + audio_out + [
+        ] + (
+            # VBV cap: keep bitrate bounded so motion can't spike bandwidth/CPU
+            ["-maxrate", "%dk" % self.bitrate, "-bufsize", "%dk" % (self.bitrate * 2)]
+            if self.bitrate > 0 else []
+        ) + audio_out + [
             "-f", "rtsp", "-rtsp_transport", "tcp", self.rtsp_url,
         ], stdin=subprocess.PIPE, pass_fds=pass_fds)
         if a_r is not None:
@@ -144,7 +157,9 @@ class VideoPipeline(IVideoFrameObserver):
             except Exception:
                 pass
             try:
-                self.ff.terminate()
+                # kill (not terminate): avoids ffmpeg trying to write an RTSP trailer to a
+                # already-gone reader, which spams "Error writing trailer: Broken pipe"
+                self.ff.kill()
             except Exception:
                 pass
             self.ff = None
@@ -184,10 +199,19 @@ class VideoPipeline(IVideoFrameObserver):
                 w, h = frame.width, frame.height
                 if not w or not h or frame.y_buffer is None:
                     return 0
-                if self.ff is None or (w, h) != (self.w, self.h):
+                if self.ff is None or (w, h) != (self.w, self.h) or self.ff.poll() is not None:
+                    if self.ff is not None and self.ff.poll() is not None:
+                        log("[video] ffmpeg exited (rc=%s) — restarting encoder" % self.ff.poll())
                     self._start_ffmpeg(w, h)
                     self.w, self.h = w, h
                     self.frames = 0
+                    self._dec_acc = 0
+                elif self.fps < self.src_fps:
+                    # decimate: keep ~fps of every src_fps source frames (cuts encode CPU)
+                    self._dec_acc += self.fps
+                    if self._dec_acc < self.src_fps:
+                        return 0                     # drop this frame
+                    self._dec_acc -= self.src_fps
                 y = _pack_plane(frame.y_buffer, frame.y_stride or w, w, h)
                 u = _pack_plane(frame.u_buffer, frame.u_stride or (w // 2), w // 2, h // 2)
                 v = _pack_plane(frame.v_buffer, frame.v_stride or (w // 2), w // 2, h // 2)

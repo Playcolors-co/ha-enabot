@@ -1,8 +1,8 @@
 """
 ebo_cloud.py — standalone Enabot cloud (ecp/ebox) client, pure Python library.
 
-Reconstructed via reverse engineering. Signs requests with ebo_sign (x-ebo-sign v2,
-verified) and authenticates with a `sessionid` cookie (from email+password login).
+Interoperates with the Enabot cloud API: signs requests with ebo_sign (x-ebo-sign v2) and
+authenticates with a `sessionid` cookie (from email+password login).
 
 Known endpoints (regional host, e.g. ebox-eu.enabotserverintl.com):
   POST /api/v2/users/login         {encrypted}               -> Set-Cookie: sessionid
@@ -13,12 +13,14 @@ import json
 import http.cookiejar
 import urllib.request
 
-import base64, os as _os, secrets as _secrets
+import base64
+import os as _os
+import secrets as _secrets
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import ebo_sign
 
-# AES-128-GCM key for the login payload (app-level constant, extracted via a Cipher hook)
-_PAYLOAD_KEY = (_os.environ.get("EBO_PAYLOAD_KEY", "REMOVED_KEY")).encode()
+# AES-128-GCM key for the login payload — supplied by the user via EBO_PAYLOAD_KEY, not shipped.
+_PAYLOAD_KEY = (_os.environ.get("EBO_PAYLOAD_KEY", "")).encode()
 
 def _enc(obj):
     iv = _secrets.token_bytes(16)
@@ -31,6 +33,33 @@ def _dec(b64):
     return __import__("json").loads(AESGCM(_PAYLOAD_KEY).decrypt(raw[:16], raw[16:], None))
 
 
+def _find_key(obj, key):
+    """Recursively find the first value for `key` in a nested dict/list (used for ebo_id)."""
+    if isinstance(obj, dict):
+        if key in obj and obj[key] not in (None, ""):
+            return obj[key]
+        for v in obj.values():
+            r = _find_key(v, key)
+            if r is not None:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = _find_key(v, key)
+            if r is not None:
+                return r
+    return None
+
+
+def region_code(host):
+    """The QR's region code (r=…) from the account's server host (matches the app)."""
+    h = (host or "").lower()
+    if "ebox-us" in h:
+        return "XUS"
+    if "enabotserver.com" in h and "intl" not in h:
+        return "XCN"
+    return "XEU"
+
+
 
 class EboCloud:
     def __init__(self, host="ebox-eu.enabotserverintl.com", sessionid=None):
@@ -38,6 +67,7 @@ class EboCloud:
         self.cj = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj))
         self._sessionid = sessionid
+        self._account_id = None
 
     def _req(self, method, path, query="", body_obj=None):
         body = json.dumps(body_obj, separators=(",", ":")).encode() if body_obj is not None else b""
@@ -73,10 +103,30 @@ class EboCloud:
         # the response is encrypted; decrypt it to read the outcome
         if isinstance(out.get("data"), str):
             out = {"app_type": out.get("app_type"), **_dec(out["data"])}
+        self._account_id = _find_key(out, "ebo_id")   # needed for pairing
         return out
+
+    @property
+    def account_id(self):
+        return self._account_id
 
     def robots(self):
         return self._req("GET", "/api/v1/ebox/robots/robot")
+
+    # --- pairing a new robot (QR provisioning, reproduced from the app) ---
+    def bind_key(self, ebo_id):
+        """Mint a one-time bind key for the account (goes into the WiFi QR)."""
+        return self._req("POST", "/api/v1/ebox/robots/bind_key",
+                         body_obj={"ebo_id": str(ebo_id)})
+
+    def bind_status(self, ebo_id, key):
+        """Poll whether the robot that scanned the QR has bound. bind_status==200 => done."""
+        return self._req("POST", "/api/v1/ebox/robots/bind_status",
+                         body_obj={"bind_key": key, "ebo_id": str(ebo_id)})
+
+    def unbind(self, robot_id):
+        """Remove (unbind) a robot from the account. DELETE, id in the path, no body. DESTRUCTIVE."""
+        return self._req("DELETE", "/api/v1/ebox/robots/robot/%d" % int(robot_id))
 
     def robot_session(self, robot_id: int):
         """Return a fresh Agora session for the robot."""

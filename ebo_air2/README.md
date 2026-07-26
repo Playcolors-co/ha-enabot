@@ -1,74 +1,42 @@
-# EBO Air 2
+# Enabot for Home Assistant
 
-Control your **Enabot EBO Air 2** from Home Assistant: battery, wifi, laser, speed,
-movement (forward/back/left/right) and a "vector" channel meant for driving it from an
-automation or an AI agent.
-
-It works with **your own Enabot credentials** (the same as the EBO HOME app): the add-on
-signs into the Enabot cloud, discovers your robot, and keeps the session alive by itself.
+Manage your **Enabot EBO robots** from Home Assistant — **all the robots on your account**,
+not just one. The add-on signs into the Enabot cloud with **your own credentials** (the same
+as the EBO HOME app), discovers every robot, and keeps a session per robot alive by itself.
 No phone, no emulator.
 
-> ⚠️ **Independent, unofficial project.** Not affiliated with Enabot or ThroughTek/Agora.
-> It interoperates with the Enabot cloud through reverse engineering, using your own
-> credentials and device. Use at your own risk; it may break if Enabot changes their API.
+It gives you three things:
 
-> ℹ️ **Tested devices.** So far this has been tested **only on the Enabot EBO Air 2**. It may
-> work with other EBO models on the same cloud (SE 2, Max, EBO X…), but that is unverified —
-> feedback and issues are welcome.
+1. **A sidebar panel** (like Zigbee2MQTT): one place to see every robot — live preview, battery,
+   Wi-Fi, quick controls (camera, wake/standby, laser, dock), per-robot settings, **pair a new
+   robot** (QR, no phone), and **remove a robot** from the account.
+2. **Home Assistant entities** for each robot: battery, Wi-Fi, charging, camera on/off, video
+   quality, speed, volume, eyes, dock/laser/wake/standby, and a **live camera**. These come
+   either over **MQTT discovery** (default) or from the companion **Enabot integration** (HACS)
+   — toggle `expose_mqtt` in the panel.
+3. **The video** of each robot as a Home Assistant camera (RTSP → HA's stream/go2rtc → WebRTC).
 
-## Requirements
+## Setup
+1. In the add-on **Configuration** tab, enter only your **email** and **password** (the Enabot
+   account) — plus the two **app crypto keys** (`payload_key` / `sign_key`), which this project
+   does not ship (see DOCS → "App crypto keys"). Everything else is managed from the **panel**.
+2. Start the add-on, then open the **panel** (the add-on's *Open Web UI* / sidebar entry).
+3. For per-robot **device + live camera** entities, install the companion **Enabot integration**
+   from HACS (custom repository `Playcolors-co/ha-enabot-integration`).
 
-- Home Assistant **OS** or **Supervised** (add-ons require the Supervisor)
-- **amd64** architecture (the Agora SDK is x86_64 only — e.g. HAOS as a VM on Proxmox/NUC ✓)
-- An **MQTT** broker in HA (the *Mosquitto broker* add-on) and the **MQTT** integration enabled
+> The "Network" ports (camera streams + the integration's data API) are internal plumbing —
+> you don't need to change them.
 
-## Installation
+## Supported models
+- **Cloud family (this add-on):** EBO **Air 2** (verified), Air 2 Plus / Air 2S / Mini, **EBO X**,
+  **Max** — all the models that use the EBO HOME app + Enabot Agora cloud. Non-Air 2 models are
+  **experimental** (same cloud; some model-specific commands may differ). All robots on your
+  account are discovered automatically.
+- **EBO SE (LAN, TUTK/Kalay):** a different, local-only stack — **not** this add-on. Use the
+  community bridge **[ebo-se-lan-bridge](https://github.com/lilium360/ebo-se-lan-bridge)** (on a
+  Raspberry Pi); it gives Home Assistant an RTSP camera + MQTT entities + its own panel. It
+  coexists with this add-on. (We can't bundle it — it needs proprietary ARM libraries.)
 
-1. Add the repository (see the [repository README](../README.md)):
-   `https://github.com/Playcolors-co/ha-enabot`
-2. Find **EBO Air 2** in the store and install it.
-3. In the add-on's **Configuration** tab set:
-   - `email` / `password` — your Enabot credentials
-   - `region` — your account region (e.g. `GB`, `US`, `EU`)
-   - `host` — keep the default if you are in Europe; US/other regions may need to change it
-     (e.g. `ebox-us.enabotserverintl.com`)
-   - `robot_id` — leave `0`: it is discovered automatically (set a value only if you have
-     more than one robot on the account)
-4. **Start** the add-on. The entities appear in Home Assistant via MQTT Discovery, under the
-   **EBO Air 2** device.
-
-## Entities
-
-| entity | type |
-|--------|------|
-| battery, wifi, SD space | sensor |
-| charging, recording | binary_sensor |
-| laser, sleep, camera, connected, motion recording, auto-record calls, cloud upload | switch |
-| camera URL (RTSP link) | sensor |
-| speed (1–100), volume (0–100), talkback volume (0–100) | number |
-| say (text-to-speech) | text |
-| patrol route | select |
-| forward / back / left / right / stop, return to base, start patrol | button |
-
-Plus the MQTT topic `ebo_air2/move/vector` which accepts `{"ly":-50,"rx":0,"hold":1.0}`
-for continuous analog control, and `ebo_air2/cmd` which accepts `{"id":<opcode>,"data":{…}}`
-to send **any** command from the [full catalog](COMANDI.md) — built for automations or an
-AI agent.
-
-## How it works / technical notes
-
-The robot talks to the cloud over **Agora RTM** (commands/telemetry, JSON) + **RTC**
-(presence). The add-on replicates the app flow: encrypted login → Agora session → control.
-Movement is retransmitted at 10 Hz with a **watchdog** (if the add-on stops, the robot
-stops). Details in [DOCS.md](DOCS.md).
-
-## Support
-
-Free, independent project. If it's useful to you, you can support the work:
-
-[![Buy me a coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=scattolacom&button_colour=FFDD00&font_colour=000000&font_family=Lato&outline_colour=000000&coffee_colour=ffffff)](https://www.buymeacoffee.com/scattolacom)
-
-## License
-
-Original code under **MIT** (see [LICENSE](../LICENSE)). No proprietary Enabot/ThroughTek
-component is included or redistributed.
+> ⚠️ **Independent, unofficial project.** Not affiliated with Enabot or ThroughTek/Agora. It
+> interoperates with the Enabot cloud through reverse engineering, using **your own** account and
+> devices. Use at your own risk; it may break if Enabot changes their API.

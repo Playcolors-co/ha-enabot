@@ -1,5 +1,363 @@
 # Changelog — Enabot integration
 
+## 0.24.1 — clearly-unofficial branding + document the user-supplied keys
+- Renamed to **EBO for Home Assistant (unofficial)** (add-on, integration, panel, logo) to avoid
+  looking official. Documented in DOCS how to supply the required app crypto keys (not shipped).
+
+## 0.24.0 — do not ship the app crypto keys (risk reduction)
+- The Enabot app's signing/encryption keys are **no longer in the public code**. They're supplied
+  by the user via the new **payload_key / sign_key** config fields (password-typed). Removed the
+  hardcoded key defaults, the extraction framing in comments, and a personal account id from the
+  tests. Unofficial/free/community wording clarified. The add-on stops with a clear message if
+  the keys aren't set.
+
+## 0.23.1 — multi-model docs (cloud family) + EBO SE guidance
+- Documented supported models: the **cloud family** (Air 2 verified; Air 2 Plus/S, Mini, EBO X,
+  Max experimental — same Agora cloud, discovered automatically). **EBO SE** is LAN/TUTK and is
+  NOT this add-on — pointed to the community **ebo-se-lan-bridge** (coexists; can't bundle its
+  proprietary ARM libs). Panel 'Add robot' notes the SE case.
+
+## 0.23.0 — native-integration reachability fix + remove robot + account + polish
+- **Fix**: the native integration couldn't reach the add-on API on the LAN IP (VLAN-firewalled).
+  The add-on now announces its API on the internal Supervisor hostname → HA reaches it regardless
+  of LAN/VLAN firewalls. Existing installs self-heal on the next boot (re-discovery).
+- **Remove a robot from the account** from the panel (unbind, DELETE robots/robot/<id>) with a
+  confirmation. Available in the robot detail.
+- The panel header shows the **connected account** (email). Settings now have readable labels
+  (incl. the **Expose entities over MQTT** toggle). Port descriptions clarified (internal).
+- README rewritten: Enabot manages ALL account robots, provides the panel + the integration.
+
+## 0.22.3 — smooth previews (both views) + Standby
+- Reverted MJPEG (didn't stream through HA Ingress → detail preview went blank). Previews now use
+  **double-buffered snapshots** (preload off-screen, swap on load) on BOTH the list and the detail
+  view → smooth, no flicker. Per-node grab lock avoids ffmpeg pile-up.
+- New **Standby** action (panel + native integration) to put the robot back to sleep.
+
+## 0.22.2 — panel fixes: phantom 'homeassistant' robot + flickering preview
+- The panel no longer creates a fake robot from `homeassistant/status` (its +/status,+/state
+  wildcards now ignore non-EBO nodes).
+- Live preview no longer flickers: the detail view uses a smooth **MJPEG stream** (set once), and
+  the panel updates values in place instead of rebuilding the page every few seconds.
+
+## 0.22.1 — wake from standby (like the app)
+- Turning the **camera on now wakes the robot** from standby (sends `isSleeping=false`, opcode
+  101047), and re-sends the wake if no video arrives — mirroring the app, where opening the live
+  view wakes it. New **EBO wake** button (MQTT) and Wake in the panel/native integration.
+
+## 0.22.0 — groundwork for the native integration (expose_mqtt toggle + data API)
+- New **`expose_mqtt`** setting (default on): off = don't publish HA entities over MQTT (the
+  native integration will own them). Panel state/commands still use MQTT.
+- The panel now also serves a **token-guarded data API** on port 8098 (host-mapped) for the
+  upcoming native integration; the API URL + token are included in the discovery announce.
+
+## 0.21.0 — pair a NEW robot from the panel (QR, no phone)
+- The **+ Add robot** button now runs the real pairing: enter the Wi-Fi, the panel mints a cloud
+  **bind key**, shows a **QR** the robot's camera scans to join Wi-Fi + bind to your account, and
+  polls until it's bound — then restarts to bring it online. Reproduces the app's flow server-side
+  (`bind_key`/`bind_status`, Base64 QR `s/p/m/k/r`). Adds the `segno` QR generator.
+
+## 0.20.1 — Enabot branding + fix white detail page + config tab = login only
+- Add-on renamed **Enabot**. Fixed the blank page on selecting a robot (a JS function was named
+  `open`, shadowing the browser's `window.open`). Everything English.
+- Configuration tab now holds ONLY **email + password**. Region, host, robot_id and all operational
+  settings live in the panel (⚙ Settings) / `/data/panel.json`.
+
+## 0.20.0 — panel redesign (list → detail) + operational settings out of the config tab
+- Panel renamed **Enabot**, now a **list** of robots (thumbnail, name, battery, wifi) — click a
+  row to open its **detail page** (big preview + controls + robot settings).
+- **Operational settings moved out of the add-on Configuration tab** into a panel-managed store
+  (`/data/panel.json`, read by run.sh): video/audio/talk, video quality (max height/fps/bitrate/
+  preset), audio codec, log level. The config tab now holds ONLY account/connection
+  (email/password/region/host/robot_id/host_ip). Existing values are migrated on first boot.
+
+## 0.19.2 — tidy config (panel-first)
+- Config tab is now just the essentials (account + connection); the panel is the place for
+  operational settings. Removed the diagnostic `audio_tx_test` and the unusable `video_encoded`
+  (H.265 passthrough segfaults) from the options schema.
+
+## 0.19.1 — panel settings (robot + add-on options)
+- The Ingress panel now edits settings: per-robot **video quality, image style, eyes, volume,
+  speed, motion recording** (over MQTT), and **add-on options** (log level, video max height /
+  fps / bitrate / preset, audio, talk) via the Supervisor (Save & restart). Added `hassio_role:
+  manager` so the panel can apply its own options.
+
+## 0.19.0 — Ingress web panel (Zigbee2MQTT-style sidebar UI)
+- New **sidebar panel** (Ingress): one page to see and manage every robot the add-on bridges —
+  online status, battery, wifi, a live JPEG preview, and quick controls (camera on/off, laser,
+  dock). Aggregated over MQTT; no extra dependency (stdlib http.server + paho + ffmpeg).
+- `panel.py` runs once for the whole add-on; movement is intentionally NOT exposed here.
+
+## 0.18.2 — English-only (docs + remaining strings)
+- Translated all docs to English and renamed GUIDA-HA→GUIDE-HA, COMANDI-APK→COMMANDS-APK;
+  fixed the last two Italian strings in code (a log line + a comment). Everything is English now.
+
+## 0.18.1 — use the robot's real name for a single robot too
+- The device/camera now takes the robot's actual account name even with one robot (was the
+  generic "EBO Air 2").
+
+## 0.18.0 — auto-discovery for the companion HA integration (device + live camera per robot)
+- The add-on now announces each robot on retained MQTT `ebo_air2/discovery/<node>` with its
+  name, serial, **MAC**, model and RTSP URL. The companion **Enabot EBO integration** (HACS,
+  `custom_components/ebo_air2`) turns this into a *"device detected → Add"* flow that creates a
+  **device named after the robot** with a **live camera** (RTSP → HA stream/go2rtc = WebRTC).
+- The MQTT device now includes the robot's **MAC as a connection**, so the integration's camera
+  **merges into the same device** as the sensors/controls — one complete device per robot.
+- No manual Generic Camera, no `/config` YAML. Multiple robots each auto-create their own
+  device + camera named after them.
+
+## 0.17.5 — video hardening (configurable fps + bitrate cap, sturdier encoder)
+- New options **`video_fps`** (default 20) and **`video_bitrate`** kbps VBV cap (default 2500,
+  0 = uncapped), alongside `video_max_height` / `video_preset` — tune resolution, frame rate and
+  bandwidth from the add-on config.
+- **Frame decimation**: drop source frames to hit the target fps, cutting re-encode CPU
+  (720p@20 ≈ 35-40% vs ~55% at 25).
+- **Bitrate cap (VBV `-maxrate/-bufsize`)**: busy scenes can't spike bandwidth/CPU.
+- **Sturdier encoder**: detect an ffmpeg exit (`poll()`) and restart it; `kill()` on stop to end
+  the "Error writing trailer: Broken pipe" log spam.
+
+## 0.17.4 — audio listen A/B CLOSED + SSH-drivable test
+- Live A/B on the real robot (via `audio_tx_test` = off/silence/tone/auto): publishing an audio
+  track — silent OR a sustained tone — NEVER opens the robot's mic. Listen is not achievable via
+  the server SDK. **Talk (→ robot speaker) is confirmed working** (the tone was heard on the
+  robot). `audio_tx_test` option added for the diagnostic; default off.
+
+## 0.17.3 — audio DIAGNOSTIC build (A/B what opens the robot's mic)
+- Live finding: with 0.17.1 publishing a silent track for 1h+, the robot's mic never opened — yet
+  our silence looped back through the mix, proving our track WAS published/active. So "an audio
+  publisher exists" is NOT the trigger.
+- Adds a runtime A/B switch over MQTT `ebo_air2/audio_tx/set` = `off` | `silence` | `tone`, and a
+  clear `*** ROBOT MIC OPENED *** (tx=…, N.s after TX start / TX was OFF)` log, to test whether the
+  robot opens its mic only when it hears real audio energy (VAD). `tone` = faint ~400 Hz.
+- Diagnostic only; no behaviour change for normal use.
+
+## 0.17.2 — honest audio + stop the false "audio works"
+- **0.17.1's silent-track trick did NOT work.** Live test: publishing a silent audio track on
+  camera-on did **not** make the robot open its mic (no `before-mix from 200001609`, no
+  `reason=6`, no stats in a 17-min run). Worse, the post-mix observer began catching **our own
+  silence** and logged a **false** `PCM flowing — audio works`, while feeding silence to the
+  RTSP audio. Reverted.
+- **Listen is now pure subscribe** (mirrors the app's speaker icon). Only the robot's
+  **before-mixing** frame (its uid) feeds the HA audio; post-mix paths are ignored so 'talk'
+  is never echoed into the listen feed and there are no false positives.
+- Honest watchdog: if the robot's mic stays muted it now says so plainly — the mic opens on its
+  own, unpredictably, and the reliable trigger is an **RTM command the phone app sends that we
+  haven't captured yet** (next step, when the phone can go on the test network).
+- `talk` (speak to the robot) is unchanged and still available via `ebo_air2/talk`; the TX track
+  is published only while a clip plays.
+- **Net effect for now:** video, movement, sensors, snapshots, patrol, eyes and TTS all work;
+  **listen** works only when the robot opens its mic on its own (best-effort, honestly reported).
+
+## 0.17.1 — audio listen: open the two-way channel so the robot's mic turns on (REVERTED in 0.17.2)
+- **Correction to 0.16.12's "audio works":** the decode pipeline is correct, but listening was
+  NOT reliable — the robot keeps its mic **muted** and only opens it when a **two-way audio
+  channel** is active. Subscribing alone left it silent for 40+ minutes in testing. (The earlier
+  one-off success was a coincidence: the robot's mic had been opened by a prior app "talk".)
+- Fix: when the camera is on and `audio: true`, the bridge now **publishes a silent audio track**
+  (`[audio-tx] publishing audio track …`). That opens the two-way channel — exactly what the
+  app's mic does — so the robot turns its microphone on and we finally receive audio. The track
+  is published only while the camera is on and unpublished when it goes off.
+- `talk` clips now flow through the same channel (queued), so talking works whenever listening is
+  on too, not just with a separate `talk: true`.
+- Trade-off to be aware of: while you're watching with audio on, the robot is in a two-way
+  "call" (it may show a call indicator / use a bit more battery). Turn the camera off to end it.
+
+## 0.17.0 — talk: speak TO the robot (two-way audio)
+- New **`talk: true`** option. When on, the bridge publishes an audio track to the robot (the
+  server-SDK equivalent of the app's mic/"talk" button — `publishMicrophoneTrack`, audio
+  scenario 3), so you can play audio through the robot's speaker.
+- New command topic **`ebo_air2/talk`** (and a text entity **"EBO talk (audio URL)"** when
+  `talk` is on): the payload is anything ffmpeg can read — an **http(s) URL** (e.g. a Home
+  Assistant **TTS media URL**) or a file path. It's decoded to 8 kHz mono and streamed to the
+  robot in real time; the track is published only while playing and unpublished after.
+  - Example (HA automation): generate TTS to a media URL, then `mqtt.publish` it to
+    `ebo_air2/talk`. Or send any sound-effect URL.
+  - Note: this makes the robot **emit sound** — it's user-initiated, but be mindful it's a
+    device in your home. One utterance plays at a time.
+- This is distinct from `ebo_air2/say` (which makes the robot speak text in *its own* TTS voice
+  via the cloud) — `talk` plays *your* audio through its speaker.
+
+## 0.16.12 — audio WORKS 🎉 (and honest watchdog)
+- Confirmed live on the robot: `first PCM frame (before-mix)` + `first remote audio DECODED —
+  codec OK!`, steady `stats: bitrate=73 bytes=… sr=8000 ch=1 loss=0`. The 0.16.9–0.16.11 chain
+  (subscribe explicitly + 8 kHz + `enable_audio_recording_or_playout=1` + drop `pcm_data_only`)
+  is the full, verified fix. Audio is forwarded to the RTSP stream.
+- **Note on timing:** the robot's mic starts *muted* and unmutes on its own (audio track
+  `reason=6` = remote-unmuted), sometimes a few minutes after connect, and can go quiet again
+  (`reason=7` = remote-offline). This is robot-side behaviour, not a bug.
+- Rewrote the misleading "no PCM after 8 s → change the codec" watchdog: it now waits longer and
+  says plainly that we're subscribed and waiting for the robot to open its mic — audio will play
+  automatically when it does.
+
+## 0.16.11 — audio: drop pcm_data_only, mirror the working video path
+- Playout enabled still gave no PCM. The one thing the audio path did that the (working) video
+  path didn't was set `AudioSubscriptionOptions(pcm_data_only=1)` — a raw-track-PCM mode that
+  bypasses the playout frame observer. Removed it: audio now uses plain `auto_subscribe_audio`
+  + `enable_audio_recording_or_playout=1` + frame observer, exactly like video.
+- Observer now also catches `on_mixed_audio_frame` (a third possible delivery path) so whichever
+  callback the SDK actually uses, we forward it — and the `first PCM frame (<source>)` log tells
+  us which one fired.
+
+## 0.16.10 — audio: enable the decode/playout pipeline + post-mix path
+- 8 kHz alone still gave no PCM despite `subscribe state 3`. Root cause: `RTCConnConfig` was
+  missing **`enable_audio_recording_or_playout=1`** — without it the SDK subscribes but never
+  runs the audio decode/playout pipeline, so the PCM observers never fire. Now enabled.
+- Also register the **post-mix `on_playback_audio_frame`** observer (the mixed remote output)
+  in addition to before-mixing, and set both frame formats to 8 kHz mono — whichever the SDK
+  delivers, we forward it to ffmpeg.
+- If this still yields no `[audio] first PCM frame`, the `[audio-diag]` subscribe-state (3) plus
+  the absence of PCM points at the SDK build, and we'll dump raw track stats next.
+
+## 0.16.9 — audio: the robot streams 8 kHz, we were asking for 16 kHz (likely THE fix)
+- Instrumented the **real app's audio-receive** path with Frida and pressed "listen" ONLY (no
+  talk): `onFirstRemoteAudioDecoded — AUDIO IS FLOWING`, `onRemoteAudioStats: bitrate=90,
+  **sr=8000, ch=1**`. So the robot streams its mic on a bare subscribe (no two-way call needed),
+  8 kHz mono G.711 — and it decodes fine.
+- Our bridge asked the SDK for **16 kHz** PCM (`AudioSubscriptionOptions` + before-mixing params
+  + ffmpeg), a mismatch with the 8 kHz source that stopped the PCM observer from ever firing.
+  Now everything uses **8 kHz mono** (`AUDIO_RATE`, env `EBO_AUDIO_RATE`). This is the concrete,
+  evidence-based cause of "subscribed (state 3) but no PCM".
+- Net of 0.16.7–0.16.9: subscribe explicitly (like the app's listen icon) + correct 8 kHz rate.
+
+## 0.16.8 — audio: subscribe harder + subscribe-state diagnostics
+- 0.16.7's `subscribe_audio` returned rc=0 but the track still didn't appear. Now: on join we
+  call **both** `subscribe_audio(uid)` and `subscribe_all_audio()`, **and retry once after 2.5 s**
+  (the robot may publish its audio track a moment after joining).
+- New diagnostics: `on_audio_subscribe_state_changed` (state 3 = subscribed, 1 = **robot has no
+  audio publisher**) and `on_user_audio_track_state_changed` — these say definitively whether the
+  robot is publishing audio at all, or we're failing to subscribe.
+- Also set the codec on the **connection** handle after connect (in addition to the global
+  pre-join set), matching the app which sets `custom_payload_type` post-join.
+- **Set `audio_codec: 8`** (not 9): the app uses payload type **8** (G.711 A-law) for this
+  monitor stream — confirmed by Frida. 9 is the wrong codec for listening.
+
+## 0.16.7 — audio: subscribe to the robot's track explicitly (VERIFIED against the app)
+- Instrumented the real app on the emulator with Frida and captured exactly what the audio
+  buttons do:
+  - **"Listen" (speaker)** → `muteRemoteAudioStream(robotUid, false)` — it just **subscribes to
+    the robot's audio track**. No RTM command; it does NOT publish the phone's mic. So the robot
+    publishes audio all along — the app simply doesn't subscribe until you tap listen.
+  - **"Talk" (mic)** → `enableLocalAudio(true)` + `updateChannelMediaOptions(publishMicrophoneTrack
+    =true)` — publishes the phone's mic (the other, outbound direction; not needed to listen).
+- Our `auto_subscribe_audio=1` wasn't engaging (no track ever appeared). Fix: on robot-join we
+  now call `local_user.subscribe_audio(robotUid)` explicitly — the exact server-SDK equivalent of
+  the app's listen button. Combined with the codec params from 0.16.5 (payload 8 = G.711 A-law),
+  the PCM observer should finally receive audio.
+- Kept `[audio-diag]` so we can confirm the track now subscribes and `received_bytes` climbs.
+
+## 0.16.6 — audio: find the mic-enable trigger by sniffing the app's RTM
+- The 0.16.4 diagnostic proved it live: the robot publishes **video** on join but **no audio
+  track at all** (zero `[audio-diag]` subscribe/stats events, both codecs). So audio isn't a
+  codec problem — the robot simply isn't sending its mic during passive monitoring. It needs a
+  trigger, which the app sends when you tap its audio/listen icon.
+- The app and the bridge publish to the **same robot RTM channel** the bridge is subscribed to,
+  so added an `[rtm-raw]` debug log of every non-telemetry RTM message. With `log_level: debug`,
+  open the official app on live view and tap the audio icon — the exact opcode it sends shows up
+  in our log, and we replicate it to enable the mic. (Confirmed the codec is **G.711 A-law**,
+  `.g711a`, in the app — payload type 8, as expected.)
+
+## 0.16.5 — audio: set the codec on the ENGINE, before join (the real fix candidate)
+- **Root-cause correction:** the codec params (`che.audio.codec_unfallback` +
+  `custom_payload_type`) were applied on the *per-connection* handle *after* `connect()`.
+  Agora's guidance for this exact case (payload 8 = G.711) is that they must be set on the
+  **global engine parameter handle before joining** — after-join never takes effect, which is
+  why the PCM observer got 0 frames. Now set on `service.get_agora_parameter()` right after
+  `svc.initialize()`, before the RTC connection is even created. **This is the single change
+  most likely to finally make the mic produce PCM.**
+- Removed the runtime 8↔9 flip — impossible now that the codec is fixed before join. To test
+  the other codec, set `audio_codec: 9` and restart (the watchdog says so, and pairs with the
+  `[audio-diag] received_bytes` line to tell "no stream" from "can't decode").
+- Kept the `[audio-diag]` observer from 0.16.4. Tests (68) + ruff clean.
+- **Honest caveat:** not verified against the robot — a well-grounded hypothesis (SDK source +
+  Agora codec-8 guidance). If it still logs no PCM *and* `received_bytes>0`, this SDK genuinely
+  can't decode the stream and the path forward is a different SDK/transport, not more tweaks.
+
+## 0.16.4 — audio: decisive diagnostic (does the robot even send audio bytes?)
+- Confirmed via the actual SDK source: `agora-python-server-sdk` 2.4.9 (the latest) has **no
+  working encoded-audio / media-packet receive path** (`register_audio_encoded_frame_observer`
+  is a `#todo` stub), so we can't grab undecoded audio to decode ourselves. The only audio path
+  is the PCM observer, which needs the SDK to decode — and it won't decode the robot's codec.
+- So the whole question is: **does the robot actually publish mic audio in monitor mode?**
+  Added a local-user observer that logs `[audio-diag] stats: bitrate=… bytes=…` plus
+  `first remote audio FRAME/DECODED`. On the next run the log tells us definitively:
+  - `bytes` grows > 0 but never `DECODED` → bytes arrive, SDK can't decode the custom codec.
+  - `bytes` stays 0 → the robot isn't sending mic audio here; it needs a trigger command.
+- No behaviour change otherwise — pure diagnostics.
+
+## 0.16.3 — fix image-style / auto-record-calls read-back (the two ❌ in your test)
+- The live `[settings]` dump proved the robot **never reports `imageStyle` or
+  `callAutoRecording`** — that's why those two entities stayed null/false even though the
+  command worked. Now the bridge **reflects the value you set optimistically** (write-only
+  settings), so the entity updates immediately → both tests go ✅.
+- Settings reports are now **merged** into state instead of replacing it, so those optimistic
+  values survive the robot's periodic reports (which omit them).
+
+## 0.16.2 — audio: auto-try both codecs + kill the false "stale image" alarm
+- **Auto-fallback 8→9:** if payload type 8 yields no PCM within 6 s, the bridge now flips to
+  9 at runtime and tries again — **one restart tests both codecs** and logs a definitive
+  verdict (`decoding OK with payload_type=N`, or `NO PCM with 8 or 9` → needs self-decode).
+- **Fix false "version MISMATCH / stale image" warning:** `VERSION.txt` is now **derived from
+  `config.yaml` at build**, so it can't drift behind the released version (that mismatch was
+  cosmetic — the new code *was* running, the banner just read a stale baked version string).
+- Verified live: 0.16.1's fix (codec params after `connect()`) runs correctly, but payload
+  type 8 alone does **not** decode this robot's mic — hence the auto-fallback.
+
+## 0.16.1 — audio: correct codec timing + flip switch + watchdog
+- **Fix ordering:** the app sets the codec params *after joining the channel*, per-connection —
+  we were setting them *before* `connect()`, which likely never took effect. Now set right
+  after connect, matching the app exactly.
+- **New option `audio_codec` (8 or 9)** in the add-on UI: 8 = monitor (default), 9 = two-way
+  call. The app uses payload type 8 for the watch flow and 9 for calls — if 8 stays silent,
+  switch to 9 from the UI (no rebuild) and restart.
+- **Watchdog:** if no PCM arrives within 8 s of enabling audio, the log now says so explicitly
+  and tells you which value to try next — so we can tell "wrong codec" from "silent playback".
+
+## 0.16.0 — audio: decode the robot's mic codec
+- The robot streams its microphone with a **custom telephony codec** (Agora audio payload
+  type 8/9), not the default. The bridge now tells the Agora engine to decode it
+  (`che.audio.codec_unfallback:[0,8,9]` + `custom_payload_type`) exactly like the app does —
+  without this the PCM observer received **0 frames** (why audio never worked).
+- Enable with `audio: true` (+ `video: true`). Watch the log for `[audio] first PCM frame`.
+- If you still hear nothing, tell me: I'll switch the payload type 8↔9 (the app uses both).
+
+## 0.15.2 — diagnose image-style / call-recording read-back
+- Added a **debug log of the raw settings report** (`log_level: debug` → line `[settings] {...}`)
+  to see exactly which fields the robot echoes. `image style` and `auto-record calls` set the
+  correct command (verified) but didn't reflect in state — this pins down whether it's a
+  read-back gap or a condition (e.g. image style may need the camera stream active).
+- No entity/behaviour change.
+
+## 0.15.1 — hardening + multi-robot fix
+- Fix: the RTSP config file used a fixed `/tmp/mediamtx.yml` path that **collided** when the
+  add-on runs one bridge per robot (multi-robot). Now per-instance (keyed by RTSP port).
+- Security/quality: added an automated **security + lint pipeline** (ruff, bandit SAST,
+  pip-audit dependency CVE scan) — all clean; nonce generation moved to a CSPRNG.
+- No functional/entity changes vs 0.15.0.
+
+## 0.15.0 — full control catalog + rich telemetry
+Mapped the **entire command set** from the app (112 commands, see `docs/COMMANDS-APK.md`) and
+exposed the useful ones as first-class Home Assistant entities.
+
+- **New controls**: rotate by angle, video quality (Low/Medium/High), image style, shoot mode,
+  move mode, eyes/emoji mode, autonomous roaming, AI subject tracking, play a preset
+  motion/voice by id, and **ask the built-in AI** a question (Air 2 has an LLM agent).
+- **New sensors** (from the robot's status report): SD card present + free/total, internal
+  storage free, docked, guard/safe mode, current **activity** (moving / charging / AI-tracking /
+  on a call / upgrading…), plus diagnostics: camera & MCU **firmware versions**, robot **IP**
+  and **WiFi SSID**.
+- The camera-setting selects (quality/style/mode) show and set the robot's real current value.
+- Everything still routes over Agora RTM, the same channel as before. The raw `ebo_air2/cmd`
+  escape hatch remains for any opcode not given its own entity.
+- A few controls with complex payloads (eyes, AI track, ask-AI, roaming) are best-effort from
+  the decompiled builder; if one misbehaves, the raw `cmd` channel gives exact control.
+
+## 0.14.0 — multi-robot (experimental)
+- If your Enabot account has **more than one robot**, the add-on now runs **one bridge per
+  robot** automatically: each gets its own device/entities and its own camera on its own RTSP
+  port (8554, 8555, …). Set `robot_id: 0` to run all; a specific id runs just that one.
+- **Single-robot behaviour is unchanged** (same entities, same `rtsp://…:8554/ebo`).
+- Note: the multi-robot path is validated only in design (we can't test 2+ robots here) — if
+  you have several EBO and try it, feedback is very welcome.
+
 ## 0.13.5 — finer driving + joystick channel
 - **Gentler move buttons** (A): each tap is a shorter, smaller nudge — turns no longer spin
   ~90° per press, forward/back are softer.

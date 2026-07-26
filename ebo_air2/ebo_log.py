@@ -44,3 +44,12 @@ def log(*a, **kw):
         os.write(_real, line.encode("utf-8", "replace"))
     except Exception:
         pass
+
+
+def raw(s):
+    """Write to the real stdout without any prefix (used for machine-readable output, e.g.
+    robot discovery captured by run.sh)."""
+    try:
+        os.write(_real, (s + "\n").encode("utf-8", "replace"))
+    except Exception:
+        pass
