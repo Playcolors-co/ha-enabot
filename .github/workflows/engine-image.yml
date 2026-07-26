@@ -34,5 +34,5 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/ebo-engine:latest
-            ghcr.io/${{ github.repository_owner }}/ebo-engine:${{ github.sha }}
+            ghcr.io/playcolors-co/ebo-engine:latest
+            ghcr.io/playcolors-co/ebo-engine:${{ github.sha }}
