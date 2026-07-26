@@ -1,0 +1,33 @@
+# EBO engine — standalone (for Home Assistant Container / Core, which can't run add-ons).
+# Runs the SAME engine as the add-on, as a plain Docker container. REQUIRES an x86_64 host
+# (the Agora SDK is amd64-only). Then add the EBO integration in HA with "manual": point it at
+# this container's RTSP + API. See STANDALONE.md.
+services:
+  ebo-engine:
+    image: ghcr.io/playcolors-co/ebo-engine:latest
+    # No public image yet / want to build from source? clone this repo and use:
+    # build: ./ebo_air2
+    platform: linux/amd64          # required: the Agora SDK is x86_64 only
+    container_name: ebo-engine
+    restart: unless-stopped
+    ports:
+      - "8554:8554"                # RTSP video (robot 1); 8555-8557 for more robots
+      - "8098:8098"                # data API for the HA integration (token-guarded)
+    volumes:
+      - ./data:/data               # persists options + api_token
+    environment:
+      # --- your Enabot account (like the EBO HOME app) ---
+      EBO_EMAIL: "you@example.com"
+      EBO_PASSWORD: "your-password"
+      # --- the two app crypto keys (constants from the EBO HOME app — not shipped) ---
+      EBO_PAYLOAD_KEY: "your-payload-key"
+      EBO_SIGN_KEY: "your-sign-key"
+      # --- API token you choose (used by the HA integration's manual step) ---
+      EBO_API_TOKEN: "change-me-to-a-long-random-string"
+      # native devices (no MQTT). Set to "true" only if you actually want MQTT entities.
+      EBO_EXPOSE_MQTT: "false"
+      # your HA/host LAN IP, so the RTSP camera URL is correct (no Supervisor to auto-detect it)
+      EBO_HOST_IP: "192.168.1.50"
+      # optional: an MQTT broker, only if EBO_EXPOSE_MQTT=true
+      # EBO_MQTT_HOST: "192.168.1.50"
+      # EBO_MQTT_PORT: "1883"

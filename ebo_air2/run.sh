@@ -5,6 +5,19 @@ set -e
 
 OPTS=/data/options.json
 
+# --- standalone (no Supervisor): synthesize /data/options.json from the environment ---
+# Lets the same image run as a plain Docker container (HA Container/Core users): pass
+# EBO_EMAIL/EBO_PASSWORD/EBO_PAYLOAD_KEY/EBO_SIGN_KEY (+ optional EBO_EXPOSE_MQTT) as env and
+# skip the options file. When Supervisor provides the file, this block is a no-op.
+if [ ! -f "$OPTS" ]; then
+  mkdir -p "$(dirname "$OPTS")"
+  case "${EBO_EXPOSE_MQTT:-false}" in 1|true|on|yes) _MQ=true;; *) _MQ=false;; esac
+  jq -n --arg e "${EBO_EMAIL:-}" --arg p "${EBO_PASSWORD:-}" \
+        --arg pk "${EBO_PAYLOAD_KEY:-}" --arg sk "${EBO_SIGN_KEY:-}" --argjson mq "$_MQ" \
+        '{email:$e,password:$p,payload_key:$pk,sign_key:$sk,expose_mqtt:$mq}' > "$OPTS"
+  echo "[standalone] synthesized $OPTS from the environment"
+fi
+
 # --- account login + the app crypto keys (supplied by you, NOT shipped in the public code) ---
 export EBO_EMAIL="$(jq -r '.email // empty' "$OPTS")"
 export EBO_PASSWORD="$(jq -r '.password // empty' "$OPTS")"
@@ -43,10 +56,13 @@ ROBOT_ID="$(pget robot_id 0)"
 [ "$ROBOT_ID" != "0" ] && export EBO_ROBOT_ID="$ROBOT_ID"
 
 # API token for the native integration to read the panel's data API (persisted in /data)
-if [ ! -f /data/api_token ]; then
+if [ -n "${EBO_API_TOKEN:-}" ]; then
+  # standalone: let the user pin the token via env (no need to docker exec to read it)
+  echo "$EBO_API_TOKEN" > /data/api_token 2>/dev/null || true
+elif [ ! -f /data/api_token ]; then
   head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' > /data/api_token 2>/dev/null || true
 fi
-export EBO_API_TOKEN="$(cat /data/api_token 2>/dev/null || echo '')"
+export EBO_API_TOKEN="$(cat /data/api_token 2>/dev/null || echo "${EBO_API_TOKEN:-}")"
 export EBO_API_PORT="${EBO_API_PORT:-8098}"
 # Home Assistant core reaches the add-on's API over the internal Supervisor network by hostname
 # (works regardless of LAN/VLAN firewalls, unlike the host IP). Fall back to the container IP.

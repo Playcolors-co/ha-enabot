@@ -1,5 +1,11 @@
 # Changelog — Enabot integration
 
+## 0.25.1 — same engine runs standalone (HA Container/Core, x86_64)
+- `run.sh` can synthesize its config from **environment variables** (`EBO_EMAIL`, `EBO_PASSWORD`,
+  `EBO_PAYLOAD_KEY`, `EBO_SIGN_KEY`, `EBO_EXPOSE_MQTT`) and honor a pinned `EBO_API_TOKEN`, so the
+  image runs as a plain Docker container for installs that can't use add-ons. No-op under
+  Supervisor. See **STANDALONE.md** + `docker-compose.yml`. Requires x86_64 (Agora SDK is amd64).
+
 ## 0.25.0 — configure from the integration + robots as distinct devices (not MQTT)
 - New add-on option **`expose_mqtt`** (default on for standalone use). The companion **EBO
   integration** now provisions the add-on for you (Supervisor): you enter the account there and it

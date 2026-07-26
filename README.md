@@ -35,6 +35,12 @@ HOME app), discovers all your robots, and gives you a panel, entities and a live
 3. Install **EBO for Home Assistant (unofficial)** and follow its [docs](ebo_air2/DOCS.md).
    You'll need your Enabot email + password and the two app crypto keys (not shipped — see docs).
 
+## No Supervisor? (HA Container / Core)
+
+Those installs can't run add-ons. You can still run the **same engine as a plain Docker container**
+on an **x86_64** machine and connect the integration to it manually — see **[STANDALONE.md](STANDALONE.md)**
+(+ [`docker-compose.yml`](docker-compose.yml)).
+
 ## Why this exists
 
 The Home Assistant community has asked for an Enabot integration
