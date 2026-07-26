@@ -1,4 +1,4 @@
-# Enabot — documentation
+# EBO for Home Assistant (unofficial) — documentation
 
 ## Supported models
 
@@ -10,69 +10,82 @@ cloud** (RTC/RTM). This add-on manages all of these from your account:
 | Model | Status |
 |---|---|
 | **EBO Air 2** | ✅ verified |
-| EBO Air 2 Plus / Air 2S / Mini | 🧪 experimental — same cloud/opcodes as the Air 2, core features (video, telemetry, move, sleep) should work; some model-specific commands may differ |
-| EBO X / EBO Max | 🧪 experimental — same Agora cloud, but more feature differences; expect some commands to need per-model tuning |
+| EBO Air 2 Plus / Air 2S / Mini | 🧪 experimental — same cloud/opcodes as the Air 2; core features (video, telemetry, move, sleep) should work, some model-specific commands may differ |
+| EBO X / EBO Max | 🧪 experimental — same Agora cloud, more feature differences; expect some commands to need per-model tuning |
 
 The add-on discovers **every robot on your account** and runs a bridge for each, so multiple/mixed
 cloud models work together. Non-verified models are best-effort — feedback and issues are welcome.
 
-**EBO SE (LAN, TUTK/Kalay)** — the SE is a different beast: it is controlled **locally over LAN
-via TUTK/Kalay**, not the Agora cloud. It is **not** supported by this add-on, and it can't be:
-the TUTK stack needs **proprietary ARM libraries** (not redistributable) plus an Android runtime,
-whereas this add-on is amd64/cloud.
-
-> 👉 **For an EBO SE**, use the community bridge **[ebo-se-lan-bridge](https://github.com/lilium360/ebo-se-lan-bridge)**
-> (runs on a Raspberry Pi). It already exposes an RTSP stream and **Home Assistant MQTT Discovery
-> + its own control panel** — so an SE gets full HA integration on its own. It coexists with this
-> add-on (SE over LAN, cloud models here); nothing to configure between them.
+**EBO SE (LAN, TUTK/Kalay)** — the SE is controlled **locally over LAN via TUTK/Kalay**, not the
+Agora cloud, so it is **not** this add-on. Use the community bridge
+**[ebo-se-lan-bridge](https://github.com/lilium360/ebo-se-lan-bridge)** (runs on a Raspberry Pi);
+it gives Home Assistant an RTSP camera + MQTT entities + its own panel. It coexists with this
+add-on. (We can't bundle it — it needs proprietary ARM libraries.)
 
 > ⚠️ **Independent, unofficial project.** Not affiliated with Enabot or ThroughTek/Agora. It
-> interoperates with the Enabot cloud through reverse engineering, using **your own**
-> credentials and devices. Use at your own risk; it may break if Enabot changes their API.
+> interoperates with the Enabot cloud through reverse engineering, using **your own** credentials
+> and devices. Use at your own risk; it may break if Enabot changes their API.
 
 ## App crypto keys (required — not shipped)
 
-To talk to the Enabot cloud, requests must be signed/encrypted with two keys that are **constants
-embedded in the official EBO HOME app**. To keep this project clean, **those keys are NOT included
-in the add-on** — you provide them yourself in the configuration:
+Requests to the Enabot cloud must be signed/encrypted with two keys that are **constants embedded
+in the official EBO HOME app**. To keep this project clean, **those keys are NOT included** — you
+provide them yourself in the configuration:
 
 - **`sign_key`** — the HMAC key for the request signature (`x-ebo-sign`).
 - **`payload_key`** — the AES-128-GCM key for the login payload.
 
 They are the same for everyone (app-level constants, not per-user secrets). A technically-inclined
-user can read them from **their own copy of the EBO HOME app** (e.g. by decompiling the APK or
-hooking `javax.crypto.Mac` / the AES cipher with Frida) — the same values the app itself uses.
-Without them the add-on stops with a clear message. This project does not distribute them.
+user can read them from **their own copy of the EBO HOME app** (decompile the APK, or hook
+`javax.crypto.Mac` / the AES cipher with Frida). Without them the add-on stops with a clear
+message. This project does not distribute them.
 
-## Configuration
+## Configuration (only 4 fields)
+
+Everything else is managed from the **panel** — the Configuration tab holds only the account +
+keys:
 
 | option | description |
 |--------|-------------|
 | `email` | your Enabot account email |
-| `password` | Enabot password (stored only here, in HA) |
-| `region` | account region (e.g. `GB`, `US`, `EU`) |
-| `host` | regional cloud endpoint. Default is EU; US ≈ `ebox-us.enabotserverintl.com` |
-| `robot_id` | `0` = auto-discovery. Set an id only if you have more than one robot |
-| `video` | startup state of the **EBO camera** switch. `false` (default) = camera off at start, so the robot is **not** kept in video mode. You can turn it on anytime from the switch. |
-| `video_encoded` | **experimental.** `true` makes the camera use the encoded-H.265 path (may crash the Agora SDK; if it does, the add-on auto-falls back to control-only). Leave `false`. |
-| `audio` | **experimental.** `true` adds the robot's microphone audio to the camera stream (listen-only, AAC). Optional — leave `false` if you only want video. |
-| `video_max_height` | downscale the re-encoded stream to this height to save CPU (native is ~1296p). `720` (default) is a good balance; `0` = keep native resolution. |
-| `video_preset` | libx264 speed/quality preset: `ultrafast` (default, lowest CPU) … `fast`. Slower presets look a bit better but use more CPU. |
-| `log_level` | add-on log verbosity: `info` (default, clean) shows key events; `debug` adds chatty lines (per-N-frames…); `warning` shows only problems. |
-| `host_ip` | optional. The IP of your Home Assistant machine, used to build the RTSP camera URL. Leave empty to auto-detect; set it (e.g. `192.168.88.15`) if the URL shows `<HOME-ASSISTANT-IP>`. |
+| `password` | your Enabot password (stays here, in your HA) |
+| `payload_key` | the app's AES login key (see above) |
+| `sign_key` | the app's HMAC signing key (see above) |
 
-Your credentials stay in the add-on configuration (in HA) and are sent only to Enabot's
-servers, exactly like the official app does.
+## The panel (sidebar)
 
-## MQTT
+The add-on serves a **web panel** (like Zigbee2MQTT) — open it from the add-on's *Open Web UI* or
+the **EBO** sidebar entry. From one place you can:
 
-The add-on requests the Supervisor `mqtt` service: it automatically picks up host, port and
-credentials of the Home Assistant broker. Make sure the *Mosquitto broker* add-on and the
-MQTT integration are enabled.
+- see **every robot** on your account: live preview, battery, Wi-Fi, online state;
+- click a robot for its **detail page** with quick actions — **Camera on/off, ☀ Wake, 🌙 Standby,
+  Laser, Dock** — and per-robot **settings** (video quality, image style, eyes, volume, speed,
+  motion recording);
+- **➕ Add robot**: pair a NEW cloud robot with a QR code, no phone needed (enter your Wi-Fi → the
+  robot scans the QR → it joins and binds to your account);
+- **🗑 Remove from account**: unbind a robot (with confirmation);
+- **⚙ Settings**: all the operational add-on options (region/host, video on/off + quality/fps/
+  bitrate/preset, audio, talk, log level, and **Expose entities over MQTT**). Saving restarts the
+  add-on. These are stored in the add-on, not in the Configuration tab.
+
+## Entities & camera
+
+Each robot's entities (battery, Wi-Fi, charging, camera switch, wake/standby/laser/dock, video
+quality, speed, volume, eyes…) appear in Home Assistant in one of two ways:
+
+- **MQTT discovery** (default, `expose_mqtt: on`) — needs the *Mosquitto broker* add-on + the MQTT
+  integration. Entities appear automatically.
+- **Native integration** — install the companion **[EBO integration](https://github.com/Playcolors-co/ha-enabot-integration)**
+  from HACS: it creates a **device per robot** (named after the robot) with a **live camera** and
+  all entities, talking to the add-on directly. Set `expose_mqtt: off` to let it own everything.
+
+The **video** is a low-latency RTSP stream (H.265 → H.264) on port **8554**; via the native
+integration or go2rtc it plays as **WebRTC**. Turning the camera on **wakes** the robot from
+standby, like the app.
 
 ## Driving from automations / AI
 
-Besides the buttons, you can publish an analog vector:
+Besides the buttons, publish an analog movement vector:
 
 ```yaml
 service: mqtt.publish
@@ -81,101 +94,34 @@ data:
   payload: '{"ly":-50,"rx":20,"hold":1.5}'
 ```
 
-- `ly` < 0 = forward, > 0 = back
-- `rx` = rotation (< 0 left, > 0 right)
-- `hold` = duration in seconds; when it expires the robot stops (watchdog)
+- `ly` < 0 = forward, > 0 = back · `rx` = rotation (< 0 left, > 0 right) · `hold` = seconds (the
+  robot stops when it expires). Scale ≈ ±100; the vector is re-sent at 10 Hz until `hold` expires.
 
-Value scale is ~±100. The vector must be "held": the add-on retransmits it at 10 Hz until
-`hold` expires or a new command arrives.
-
-## More entities (v0.4)
-
-Besides battery/wifi/charging/recording/laser/speed and the move buttons, the add-on now
-exposes: **sleep** (switch), **say** (text — the robot speaks what you type), **volume**
-(number), and **return to base** (button — starts driving to the dock; only works when the
-robot is *not* already charging).
-
-### Patrol
-
-- **patrol route** (select) — lists the patrol routes saved in the EBO HOME app, plus
-  `auto (no route)`. The list is fetched from the robot at start-up.
-- **start patrol** (button) — starts patrolling: with `auto (no route)` the robot does a
-  free patrol (no route needed); with a named route it follows that saved route.
-
-There is **no dedicated "stop patrol"** command in the robot's protocol — to interrupt a
-patrol, just send any movement (e.g. the *stop* button). Routes are **created in the EBO
-HOME app** (the add-on can only list and start them).
-
-> **AI tracking** stays raw-only: it is interactive (you pick the subject, `{mode,
-> trackTarget}`). Trigger it via the raw command channel below — see [COMANDI.md](COMANDI.md).
-
-## Full command catalog + raw channel (AI)
-
-The robot understands many more commands than there are entities. The topic **`ebo_air2/cmd`**
-accepts a raw command for an automation or an AI agent:
-
-```yaml
-service: mqtt.publish
-data:
-  topic: ebo_air2/cmd
-  payload: '{"id": 103501, "data": {"userId": "<yourUserId>", "text": "hello"}}'
-```
-
-The complete opcode catalog (movement, motion presets, voice, TTS, camera, eyes emoji,
-scheduling, system…) is in [COMANDI.md](COMANDI.md). Commands marked *(moves)* drive the
-robot — use them only when you can see it.
-
-## Video (camera) — decoded path (v0.9)
-
-> **Status (v0.9.0):** new approach. The SDK's *encoded* frame path segfaults for H.265, but
-> the SDK **can decode H.265 to raw YUV**. So the add-on now subscribes to the **decoded**
-> video (`register_video_frame_observer`, `auto_subscribe_video=1`), takes the YUV frames and
-> **re-encodes them to H.264 with ffmpeg**, then serves RTSP. If the robot publishes and the
-> SDK decodes, you'll see `[video] first decoded frame WxH` and `N frames received` in the
-> log — then the camera works. Enable with `video: true` and the **EBO camera** switch.
-
-### The camera switch
-
-The **EBO camera** switch controls the video. It is **off by default**: the add-on stays in
-RTC only for control (so commands work), but it does **not** subscribe to the robot's video —
-which is what keeps the robot in "video mode". Turn the switch **on** only when you want the
-stream; turn it **off** to let the robot leave video mode (saves battery, more privacy).
-
-When you turn it on, the add-on subscribes to the robot's Agora video and republishes it as
-**RTSP** on port **8554**. The exact URL is shown:
-- in the **EBO camera URL** sensor (e.g. `rtsp://192.168.88.15:8554/ebo`), and
-- in the add-on **log** (`[video] ON — … Camera stream: rtsp://…`).
-
-To see it in Home Assistant:
-1. Turn the **EBO camera** switch **on**.
-2. **Settings → Devices & Services → + Add Integration → Generic Camera**
-3. Stream URL = the value of the **EBO camera URL** sensor (`rtsp://<HA-IP>:8554/ebo`).
-4. Leave the rest at defaults → Submit.
-
-The stream is passed through without transcoding (`-c copy`). Check the log for
-`[video] N frames received` to confirm frames are actually flowing (with the current SDK they
-usually are **not**, for H.265 — see the status note above).
+The full opcode catalog (motion presets, voice, TTS, camera, eyes, scheduling, system…) is in
+[COMANDI.md](COMANDI.md), usable via the raw `ebo_air2/cmd` topic. Commands that move the robot
+should only be used when you can see it.
 
 ## Known limitations
 
-- **amd64 only** (Agora SDK is x86_64).
-- **Video** requires the robot to publish its stream; if the log shows 0 frames, the
-  robot may only stream on demand (open an issue).
-- One control client at a time: while the add-on is active, the EBO HOME app on the same
-  account may be disconnected from control.
-- Depends on Enabot's cloud API: a change on their side may require an update.
+- **amd64 only** (the Agora SDK is x86_64).
+- **Listen (robot microphone)** is best-effort: the robot opens its mic on its own, unpredictably
+  — this can't be forced from the server SDK. **Talk** (your audio → robot speaker) works.
+- One control session per account: while the add-on is active, the EBO HOME app on the same
+  account may be disconnected, and vice versa.
+- Depends on Enabot's cloud API — a change on their side may require an update.
 
 ## Troubleshooting
 
-- **"login failed"**: check email/password and the correct `region`/`host`.
-- **No entities in HA**: make sure MQTT (Mosquitto + integration) is running.
-- **Robot does not respond to commands**: make sure no other session (the app) is
-  controlling the robot at the same time.
+- **Add-on stops: "crypto keys not shipped"** → set `payload_key` and `sign_key` (see above).
+- **"login failed"** → check email/password and the region/host (panel → ⚙ Settings).
+- **No entities** → with `expose_mqtt: on`, ensure Mosquitto + the MQTT integration are running;
+  or install the native integration and set `expose_mqtt: off`.
+- **Robot doesn't respond** → make sure the EBO HOME app isn't controlling the same account.
+- **Camera blank in the panel** → the preview is a smooth snapshot; for full live video use the
+  camera entity (WebRTC) from the native integration.
 
 ## Support
 
-This is a free, independent project. If it's useful to you, you can support the work:
-
-[![Buy me a coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=scattolacom&button_colour=FFDD00&font_colour=000000&font_family=Lato&outline_colour=000000&coffee_colour=ffffff)](https://www.buymeacoffee.com/scattolacom)
+Free, independent project. If it's useful, an optional coffee is appreciated — never required:
 
 ☕ **[buymeacoffee.com/scattolacom](https://www.buymeacoffee.com/scattolacom)**

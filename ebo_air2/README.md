@@ -1,4 +1,4 @@
-# Enabot for Home Assistant
+# EBO for Home Assistant (unofficial)
 
 Manage your **Enabot EBO robots** from Home Assistant — **all the robots on your account**,
 not just one. The add-on signs into the Enabot cloud with **your own credentials** (the same
