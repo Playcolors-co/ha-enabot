@@ -4,7 +4,7 @@ FROM ${BUILD_FROM}
 # Required tools: jq + curl are used by run.sh (options + Supervisor MQTT). ca-certificates
 # for TLS. Keep this step minimal so an update rebuild rarely fails here.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends jq curl ca-certificates procps \
+    && apt-get install -y --no-install-recommends jq curl ca-certificates procps mosquitto \
     && rm -rf /var/lib/apt/lists/*
 
 # Core Python deps (required). Retry so a flaky network doesn't break the build.
@@ -35,6 +35,8 @@ WORKDIR /app
 # it can never drift out of sync with the released version (a manual bump was easy to forget,
 # causing a false "stale image" warning). run.sh logs it to prove which version is live.
 COPY config.yaml ebo_bridge.py ebo_cloud.py ebo_sign.py ebo_video.py ebo_log.py panel.py run.sh /app/
+# Bundle the companion integration so run.sh can install it into /homeassistant/custom_components.
+COPY ha_integration /app/ha_integration
 RUN sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' /app/config.yaml > /app/VERSION.txt \
     && echo "baked VERSION.txt=$(cat /app/VERSION.txt)" \
     && chmod +x /app/run.sh

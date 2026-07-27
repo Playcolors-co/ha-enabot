@@ -52,10 +52,12 @@ keys:
 | `payload_key` | the app's AES login key (see above) |
 | `sign_key` | the app's HMAC signing key (see above) |
 
-> 💡 **Prefer to configure from the integration?** Install the companion
-> **[EBO integration](https://github.com/Playcolors-co/ha-enabot-integration)** (HACS) and enter
-> the account there — it writes these four fields into the add-on and starts it for you, so you
-> never touch this tab. Leave the fields blank if you go that route.
+A fifth option, `api_token`, is auto-generated (the companion integration uses it to read the
+add-on's data API) — you don't need to set it.
+
+> 💡 **The companion integration installs itself.** On start the add-on copies its integration into
+> Home Assistant. Restart HA once, then **Settings → Devices & Services → + Add Integration →
+> "EBO"** — it finds your robots automatically. No HACS, nothing to type.
 
 ## The panel (sidebar)
 
@@ -70,25 +72,20 @@ the **EBO** sidebar entry. From one place you can:
   robot scans the QR → it joins and binds to your account);
 - **🗑 Remove from account**: unbind a robot (with confirmation);
 - **⚙ Settings**: all the operational add-on options (region/host, video on/off + quality/fps/
-  bitrate/preset, audio, talk, log level, and **Expose entities over MQTT**). Saving restarts the
-  add-on. These are stored in the add-on, not in the Configuration tab.
+  bitrate/preset, audio, talk, log level). Saving restarts the add-on. These are stored in the
+  add-on, not in the Configuration tab.
 
-## Entities & camera
+## Entities & camera — native, no MQTT
 
-Each robot's entities (battery, Wi-Fi, charging, camera switch, wake/standby/laser/dock, video
-quality, speed, volume, eyes…) appear in Home Assistant in one of two ways:
+Each robot is a **distinct device under the EBO integration** (named after the robot), with a
+**live camera** and all entities (battery, Wi-Fi, charging, camera switch, wake/standby/laser/dock,
+video quality, speed, volume, eyes…). **No MQTT is involved** in your Home Assistant: the integration
+reads everything from the add-on's HTTP API. (Internally the add-on uses a private broker on
+localhost as glue between its processes — you never see it, and no Mosquitto is required.)
 
-- **Native integration (recommended)** — install the companion **[EBO integration](https://github.com/Playcolors-co/ha-enabot-integration)**
-  from HACS: each robot becomes a **distinct device** (named after the robot) with a **live camera**
-  and all entities — *not* a bag of MQTT entities. When you set up through the integration it sets
-  `expose_mqtt: off` for you, so this is the default experience.
-- **MQTT discovery** (standalone add-on, `expose_mqtt: on`) — needs the *Mosquitto broker* add-on +
-  the MQTT integration; entities appear under the MQTT integration automatically. Use this only if
-  you don't install the companion integration.
-
-The **video** is a low-latency RTSP stream (H.265 → H.264) on port **8554**; via the native
-integration or go2rtc it plays as **WebRTC**. Turning the camera on **wakes** the robot from
-standby, like the app.
+The **video** is a low-latency RTSP stream (H.265 → H.264) on port **8554**; the integration plays
+it as **WebRTC** via HA's stream/go2rtc. Turning the camera on **wakes** the robot from standby,
+like the app.
 
 ## Driving from automations / AI
 
@@ -97,7 +94,7 @@ Besides the buttons, publish an analog movement vector:
 ```yaml
 service: mqtt.publish
 data:
-  topic: ebo_air2/move/vector
+  topic: ebo/move/vector
   payload: '{"ly":-50,"rx":20,"hold":1.5}'
 ```
 
@@ -105,7 +102,7 @@ data:
   robot stops when it expires). Scale ≈ ±100; the vector is re-sent at 10 Hz until `hold` expires.
 
 The full opcode catalog (motion presets, voice, TTS, camera, eyes, scheduling, system…) is in
-[COMANDI.md](COMANDI.md), usable via the raw `ebo_air2/cmd` topic. Commands that move the robot
+[COMANDI.md](COMANDI.md), usable via the raw `ebo/cmd` topic. Commands that move the robot
 should only be used when you can see it.
 
 ## Known limitations
@@ -121,8 +118,9 @@ should only be used when you can see it.
 
 - **Add-on stops: "crypto keys not shipped"** → set `payload_key` and `sign_key` (see above).
 - **"login failed"** → check email/password and the region/host (panel → ⚙ Settings).
-- **No entities** → with `expose_mqtt: on`, ensure Mosquitto + the MQTT integration are running;
-  or install the native integration and set `expose_mqtt: off`.
+- **No devices in Home Assistant** → after first start, **restart Home Assistant once** (to load
+  the integration the add-on installed), then **+ Add Integration → "EBO"**. Check the add-on log
+  for the "installed the EBO integration" line.
 - **Robot doesn't respond** → make sure the EBO HOME app isn't controlling the same account.
 - **Camera blank in the panel** → the preview is a smooth snapshot; for full live video use the
   camera entity (WebRTC) from the native integration.

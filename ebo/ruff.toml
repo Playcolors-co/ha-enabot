@@ -1,0 +1,10 @@
+# Lint configuration for the EBO Air 2 add-on.
+# We lint for real problems (pyflakes F, bugbear B, real pycodestyle E/W) and tolerate the
+# project's compact one-liners (E701/E702) and long lines (E501).
+line-length = 100
+[lint]
+select = ["E", "W", "F", "B"]
+ignore = ["E701", "E702", "E501", "B008"]
+[lint.per-file-ignores]
+"tests/*" = ["B", "E402", "F811"]
+"make_icon.py" = ["B"]

@@ -119,8 +119,8 @@ PATROL_AUTO = "auto (no route)"
 
 DISCOVERY_PREFIX = "homeassistant"
 # per-robot: one add-on can run a bridge per robot, each with its own MQTT prefix / camera
-# path. Single robot keeps the classic "ebo_air2" so existing entities are untouched.
-NODE = os.environ.get("EBO_NODE", "ebo_air2")
+# path. Single robot keeps the classic "ebo" so existing entities are untouched.
+NODE = os.environ.get("EBO_NODE", "ebo")
 
 
 class Bridge:
@@ -920,7 +920,7 @@ class Bridge:
         return dev
 
     def _publish_integration_discovery(self):
-        """Announce this robot to the companion HA integration (custom_components/ebo_air2),
+        """Announce this robot to the companion HA integration (custom_components/ebo),
         which turns it into a 'device detected → Add' flow that creates a live camera. Retained
         so HA sees it whenever it (re)starts. Topic namespace is fixed regardless of EBO_NODE."""
         if not self.mqtt or not self.info.get("mac"):
@@ -941,7 +941,7 @@ class Bridge:
             "api": ("http://%s:%s" % (host_ip, api_port)) if host_ip else "",
             "token": os.environ.get("EBO_API_TOKEN", ""),
         }
-        self.mqtt.publish("ebo_air2/discovery/%s" % NODE, json.dumps(payload), retain=True)
+        self.mqtt.publish("ebo/discovery/%s" % NODE, json.dumps(payload), retain=True)
         log("[discovery] announced robot to the EBO integration (%s)" % payload["name"])
 
     def _disc(self, comp, oid, cfg):
@@ -1003,7 +1003,7 @@ class Bridge:
         st = "%s/state" % NODE
 
         # clean up entities removed in v0.4.4 (patrol / AI tracking were not real
-        # one-shot commands; they live on the raw ebo_air2/cmd channel now)
+        # one-shot commands; they live on the raw ebo/cmd channel now)
         self._remove_entity("button", "patrol")
         self._remove_entity("switch", "ai_track")
 
@@ -1239,7 +1239,7 @@ class Bridge:
         self._publish_camera_state()
         self._publish_conn_state()
         # RAW escape hatch for an AI/automation: publish {"id":<opcode>,"data":{...}}
-        # to ebo_air2/cmd to send ANY command from the full catalog (docs/COMANDI.md).
+        # to ebo/cmd to send ANY command from the full catalog (docs/COMANDI.md).
         c.subscribe("%s/cmd" % NODE)
 
     def _on_mqtt_message(self, c, u, msg):

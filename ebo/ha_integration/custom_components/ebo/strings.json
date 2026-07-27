@@ -1,0 +1,29 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "manual": {
+        "title": "Add EBO robot manually",
+        "description": "No Supervisor detected. Enter the engine's RTSP URL and, for entities, its data API URL + token (see STANDALONE.md).",
+        "data": {
+          "name": "Name",
+          "rtsp": "RTSP URL",
+          "sn": "Serial number (optional)",
+          "mac": "MAC address (optional)",
+          "model": "Model",
+          "node": "Node id",
+          "api": "Engine API URL",
+          "token": "API token"
+        }
+      }
+    },
+    "abort": {
+      "addon": "Robots are being added from the EBO add-on.",
+      "setup_started": "Setting up — your EBO robots are being added.",
+      "no_new_robots": "No new robots to add (they're already set up, or none are paired yet).",
+      "addon_not_found": "Couldn't reach the EBO add-on. Make sure it's installed and running.",
+      "invalid_discovery": "The add-on sent an invalid discovery message.",
+      "already_configured": "This robot is already added."
+    }
+  }
+}

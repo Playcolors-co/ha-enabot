@@ -6,12 +6,12 @@ a **raw command channel** so an automation or an AI agent can send any command.
 
 ## Raw command channel (for AI / automations)
 
-Publish to the MQTT topic `ebo_air2/cmd`:
+Publish to the MQTT topic `ebo/cmd`:
 
 ```yaml
 service: mqtt.publish
 data:
-  topic: ebo_air2/cmd
+  topic: ebo/cmd
   payload: '{"id": 103501, "data": {"userId": "<yourUserId>", "text": "hello"}}'
 ```
 
@@ -47,7 +47,7 @@ created in the EBO HOME app. No dedicated stop — send any movement to interrup
 - **AI tracking** — `{"id":103049,"data":{"mode":<m>,"trackTarget":<t>}}` **(moves)**. In the
   app this is interactive — you tap the subject in the live video to get `mode`/`trackTarget`.
 
-## Full opcode catalog (send via `ebo_air2/cmd`)
+## Full opcode catalog (send via `ebo/cmd`)
 
 **Movement / motion**
 - `101007` move vector — `lx,ly,rx,ry,buttons` **(moves)**

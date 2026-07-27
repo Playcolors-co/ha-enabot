@@ -25,14 +25,17 @@ The engine exposes **RTSP** on `8554` and the **data API** on `8098`.
 - **The two app keys** (`EBO_PAYLOAD_KEY` / `EBO_SIGN_KEY`) are constants from the EBO HOME app,
   not shipped here — see the add-on docs → "App crypto keys".
 - **`EBO_API_TOKEN`** is any long random string you pick; you'll paste it into HA below.
-- Leave **`EBO_EXPOSE_MQTT: "false"`** so each robot is a clean, distinct device in HA (no MQTT).
+- **Robots are native EBO devices — no MQTT.**
 
 ## 2) Add the integration in Home Assistant
 
-1. Install the **EBO integration** (HACS → custom repository `Playcolors-co/ha-enabot-integration`),
-   restart HA.
-2. **Settings → Devices & Services → + Add Integration → EBO**. With no Supervisor it goes straight
-   to the **manual** step — fill in:
+The integration is **bundled in the image** — no HACS. If you mount your Home Assistant config dir
+(uncomment the `/homeassistant` volume in the compose), the engine installs it for you; otherwise
+copy `ha_integration/custom_components/ebo` into your HA `custom_components/`. Then:
+
+1. **Restart Home Assistant** (to load the integration).
+2. **Settings → Devices & Services → + Add Integration → EBO**. With no Supervisor it opens the
+   **manual** step — fill in:
    - **RTSP URL**: `rtsp://<engine-ip>:8554/ebo`
    - **API URL**: `http://<engine-ip>:8098`
    - **API token**: the `EBO_API_TOKEN` you set
@@ -43,9 +46,8 @@ Add one integration entry per robot (extra robots stream on `8555`, `8556`, `855
 
 ## Notes
 
-- **No MQTT needed.** The manual step talks straight to the engine's API; MQTT is only for the
-  standalone "expose entities over MQTT" mode.
+- **No MQTT anywhere.** The integration talks straight to the engine's API.
 - **Command lag** is the Agora **cloud** round-trip, the same as the app — not something the engine
   or the transport adds. Local control isn't possible on these models.
-- **Build from source** instead of the published image: clone this repo and set `build: ./ebo_air2`
+- **Build from source** instead of the published image: clone this repo and set `build: ./ebo`
   in the compose file (drop the `image:` line).

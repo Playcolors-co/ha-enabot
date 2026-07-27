@@ -18,7 +18,7 @@ robot, plus laser, return to base, "talk", speed and status.
    - Quick alternative (video only, no audio): **Settings → Devices → Add
      integration → Generic Camera**, Stream URL = `rtsp://<IP-ADD-ON>:8554/ebo`.
    Name the resulting entity, e.g., `camera.ebo`. **Replace `camera.ebo`** below with yours.
-3. Turn on the **EBO camera** switch (or `mqtt.publish` to `ebo_air2/camera/set` = `on`): only then
+3. Turn on the **EBO camera** switch (or `mqtt.publish` to `ebo/camera/set` = `on`): only then
    does the bridge subscribe to the robot's video.
 
 ## Card A — `picture-elements` (native, no extra component)
@@ -39,7 +39,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/move/vector, payload: '{"lx":0,"ly":-55,"rx":0,"ry":0,"hold":0.8}'}
+      data: {topic: ebo/move/vector, payload: '{"lx":0,"ly":-55,"rx":0,"ry":0,"hold":0.8}'}
   - type: icon
     icon: mdi:chevron-down
     title: Backward
@@ -47,7 +47,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/move/vector, payload: '{"lx":0,"ly":55,"rx":0,"ry":0,"hold":0.8}'}
+      data: {topic: ebo/move/vector, payload: '{"lx":0,"ly":55,"rx":0,"ry":0,"hold":0.8}'}
   - type: icon
     icon: mdi:chevron-left
     title: Turn left
@@ -55,7 +55,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/move/vector, payload: '{"lx":0,"ly":0,"rx":-65,"ry":0,"hold":0.6}'}
+      data: {topic: ebo/move/vector, payload: '{"lx":0,"ly":0,"rx":-65,"ry":0,"hold":0.6}'}
   - type: icon
     icon: mdi:chevron-right
     title: Turn right
@@ -63,7 +63,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/move/vector, payload: '{"lx":0,"ly":0,"rx":65,"ry":0,"hold":0.6}'}
+      data: {topic: ebo/move/vector, payload: '{"lx":0,"ly":0,"rx":65,"ry":0,"hold":0.6}'}
   - type: icon
     icon: mdi:stop-circle-outline
     title: Stop
@@ -71,7 +71,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/move/stop, payload: ""}
+      data: {topic: ebo/move/stop, payload: ""}
 
   # ---------- ACTIONS (right column) ----------
   - type: icon
@@ -81,11 +81,11 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/laser/set, payload: "on"}
+      data: {topic: ebo/laser/set, payload: "on"}
     hold_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/laser/set, payload: "off"}
+      data: {topic: ebo/laser/set, payload: "off"}
   - type: icon
     icon: mdi:home-import-outline
     title: Return to base
@@ -93,7 +93,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/dock, payload: ""}
+      data: {topic: ebo/dock, payload: ""}
   - type: icon
     icon: mdi:camera-iris
     title: Snapshot
@@ -101,7 +101,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/cmd, payload: '{"id":102101,"data":{}}'}   # optional/best-effort
+      data: {topic: ebo/cmd, payload: '{"id":102101,"data":{}}'}   # optional/best-effort
 
   # ---------- SPEED (top right) ----------
   - type: icon
@@ -111,7 +111,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/speed/set, payload: "40"}
+      data: {topic: ebo/speed/set, payload: "40"}
   - type: icon
     icon: mdi:speedometer
     title: Faster
@@ -119,7 +119,7 @@ elements:
     tap_action:
       action: call-service
       service: mqtt.publish
-      data: {topic: ebo_air2/speed/set, payload: "95"}
+      data: {topic: ebo/speed/set, payload: "95"}
 
   # ---------- STATUS (top left) — replace with your own entity ids ----------
   - type: state-label
@@ -132,14 +132,14 @@ elements:
 ```
 
 ### Notes
-- The D-pad uses `ebo_air2/move/vector` with `hold`: each tap moves a little and **stops on its own**.
+- The D-pad uses `ebo/move/vector` with `hold`: each tap moves a little and **stops on its own**.
   Want longer/shorter steps? Change `hold` (seconds) or the `ly`/`rx` values (−100..100).
 - **Safety:** these commands *move* the robot. Use them only with the robot in a safe area and
   under your supervision (never remotely if you don't know what's around it).
 - Also want to **talk** from the video? Add an `mdi:microphone` icon that opens an `input_text`
-  with the audio URL and publishes to `ebo_air2/talk` (requires `talk: true`).
+  with the audio URL and publishes to `ebo/talk` (requires `talk: true`).
 
 ## Card B — analog joystick (faithful to the app, drag)
 Requires a custom card. If you want it I'll write it for you: a JS file (Lovelace resource) that draws
-a **draggable joystick** on top of the video and publishes continuously to `ebo_air2/move/vector`
+a **draggable joystick** on top of the video and publishes continuously to `ebo/move/vector`
 (release → stop), exactly like the app's analog pad. Just say "make card B".

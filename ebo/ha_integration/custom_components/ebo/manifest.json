@@ -1,0 +1,12 @@
+{
+  "domain": "ebo",
+  "name": "EBO for Home Assistant (unofficial)",
+  "version": "0.4.0",
+  "config_flow": true,
+  "documentation": "https://github.com/Playcolors-co/ha-enabot",
+  "issue_tracker": "https://github.com/Playcolors-co/ha-enabot/issues",
+  "after_dependencies": ["hassio"],
+  "codeowners": ["@TheBoxCoder"],
+  "iot_class": "local_polling",
+  "integration_type": "device"
+}

@@ -31,7 +31,7 @@ see:
 
 ### Talking to the robot (`talk: true`)
 You send audio to the speaker by publishing a **URL or path** (anything ffmpeg can read)
-to the MQTT topic `ebo_air2/talk`. Automation example: HA TTS → media URL → `mqtt.publish`.
+to the MQTT topic `ebo/talk`. Automation example: HA TTS → media URL → `mqtt.publish`.
 ```yaml
 # Example: make the robot "speak" with HA's TTS voice
 service: tts.speak
@@ -41,9 +41,9 @@ data:
   message: "Hi, I am home!"
 target:
   entity_id: tts.google_translate_en   # or your TTS engine
-# …then in a second step publish the generated URL to ebo_air2/talk.
+# …then in a second step publish the generated URL to ebo/talk.
 ```
-Easiest way to try it right now: publish the URL of a public mp3 to `ebo_air2/talk` from
+Easiest way to try it right now: publish the URL of a public mp3 to `ebo/talk` from
 Developer Tools → MQTT.
 
 > **Note:** this makes the robot **emit sound**. It's your action, but keep it in mind: it's a
@@ -127,7 +127,7 @@ cards:
 Use `picture-elements` with the buttons on top of the video. Note: in `picture-elements` the video
 uses the standard camera path (a touch more latency than the pure WebRTC option). Ready-made YAML in
 [`DASHBOARD-CONTROL-OVERLAY.md`](DASHBOARD-CONTROL-OVERLAY.md), which publishes the **movement
-vector** to `ebo_air2/move/vector` (`{"lx":..,"ly":..,"hold":0.6}`) for continuous, joystick-style
+vector** to `ebo/move/vector` (`{"lx":..,"ly":..,"hold":0.6}`) for continuous, joystick-style
 control instead of jerky steps.
 
 > Tip: **Level 1** for driving (responsiveness), **Level 2** if you want the aesthetic effect.
@@ -139,6 +139,6 @@ control instead of jerky steps.
 
 - **Video, movement, sensors, snapshot, patrol, eyes, TTS**: they work.
 - **Smooth video**: achieved on the HA side with WebRTC (section 2). The add-on is already low-latency.
-- **Talking to the robot** (`talk`): works, via `ebo_air2/talk`.
+- **Talking to the robot** (`talk`): works, via `ebo/talk`.
 - **Hearing the robot** (`audio`): best-effort until I capture the microphone's RTM command.
   It's the only unreliable piece, and now the log tells you plainly, with no false "it works".

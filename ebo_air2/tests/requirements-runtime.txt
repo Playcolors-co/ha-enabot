@@ -1,3 +1,0 @@
-agora-python-server-sdk==2.4.9
-paho-mqtt
-cryptography

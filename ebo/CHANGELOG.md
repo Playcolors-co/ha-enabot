@@ -1,5 +1,18 @@
 # Changelog — Enabot integration
 
+## 0.26.0 — native-only, no MQTT, one repo, self-installing integration
+- **Renamed `ebo_air2` → `ebo`** (add-on slug, integration domain, topics) so it's generic for
+  future robot models; robots stay distinct via their `model`.
+- **No MQTT in your Home Assistant.** The bridge↔panel bus is now a **mosquitto bound to
+  127.0.0.1 inside the container** (private); `services: mqtt:need` removed. Home Assistant needs
+  no broker and no MQTT integration. Entities come from the **native integration** only.
+- **The add-on installs its integration itself** (no HACS): the image bundles it and copies it into
+  `/homeassistant/custom_components/ebo` (`map: homeassistant_config:rw`). After one Home Assistant
+  restart: **Settings → Devices & Services → + Add Integration → "EBO"** — it finds your robots via
+  the add-on's API automatically (nothing to type). Robots appear as **distinct devices under EBO**.
+- The integration no longer depends on MQTT; discovery is via the add-on's HTTP API. Token is
+  auto-generated and persisted to the add-on options so the integration can read it via Supervisor.
+
 ## 0.25.2 — command-dispatch timing (proves the lag is the cloud, not the transport)
 - The bridge logs the **local** cost of dispatching a command (the only part MQTT-vs-native could
   affect); it's normally a few ms, so it stays silent unless it exceeds 25 ms. The rest of the
@@ -117,9 +130,9 @@
   generic "EBO Air 2").
 
 ## 0.18.0 — auto-discovery for the companion HA integration (device + live camera per robot)
-- The add-on now announces each robot on retained MQTT `ebo_air2/discovery/<node>` with its
+- The add-on now announces each robot on retained MQTT `ebo/discovery/<node>` with its
   name, serial, **MAC**, model and RTSP URL. The companion **Enabot EBO integration** (HACS,
-  `custom_components/ebo_air2`) turns this into a *"device detected → Add"* flow that creates a
+  `custom_components/ebo`) turns this into a *"device detected → Add"* flow that creates a
   **device named after the robot** with a **live camera** (RTSP → HA stream/go2rtc = WebRTC).
 - The MQTT device now includes the robot's **MAC as a connection**, so the integration's camera
   **merges into the same device** as the sensors/controls — one complete device per robot.
@@ -146,7 +159,7 @@
 - Live finding: with 0.17.1 publishing a silent track for 1h+, the robot's mic never opened — yet
   our silence looped back through the mix, proving our track WAS published/active. So "an audio
   publisher exists" is NOT the trigger.
-- Adds a runtime A/B switch over MQTT `ebo_air2/audio_tx/set` = `off` | `silence` | `tone`, and a
+- Adds a runtime A/B switch over MQTT `ebo/audio_tx/set` = `off` | `silence` | `tone`, and a
   clear `*** ROBOT MIC OPENED *** (tx=…, N.s after TX start / TX was OFF)` log, to test whether the
   robot opens its mic only when it hears real audio energy (VAD). `tone` = faint ~400 Hz.
 - Diagnostic only; no behaviour change for normal use.
@@ -163,7 +176,7 @@
 - Honest watchdog: if the robot's mic stays muted it now says so plainly — the mic opens on its
   own, unpredictably, and the reliable trigger is an **RTM command the phone app sends that we
   haven't captured yet** (next step, when the phone can go on the test network).
-- `talk` (speak to the robot) is unchanged and still available via `ebo_air2/talk`; the TX track
+- `talk` (speak to the robot) is unchanged and still available via `ebo/talk`; the TX track
   is published only while a clip plays.
 - **Net effect for now:** video, movement, sensors, snapshots, patrol, eyes and TTS all work;
   **listen** works only when the robot opens its mic on its own (best-effort, honestly reported).
@@ -186,15 +199,15 @@
 - New **`talk: true`** option. When on, the bridge publishes an audio track to the robot (the
   server-SDK equivalent of the app's mic/"talk" button — `publishMicrophoneTrack`, audio
   scenario 3), so you can play audio through the robot's speaker.
-- New command topic **`ebo_air2/talk`** (and a text entity **"EBO talk (audio URL)"** when
+- New command topic **`ebo/talk`** (and a text entity **"EBO talk (audio URL)"** when
   `talk` is on): the payload is anything ffmpeg can read — an **http(s) URL** (e.g. a Home
   Assistant **TTS media URL**) or a file path. It's decoded to 8 kHz mono and streamed to the
   robot in real time; the track is published only while playing and unpublished after.
   - Example (HA automation): generate TTS to a media URL, then `mqtt.publish` it to
-    `ebo_air2/talk`. Or send any sound-effect URL.
+    `ebo/talk`. Or send any sound-effect URL.
   - Note: this makes the robot **emit sound** — it's user-initiated, but be mindful it's a
     device in your home. One utterance plays at a time.
-- This is distinct from `ebo_air2/say` (which makes the robot speak text in *its own* TTS voice
+- This is distinct from `ebo/say` (which makes the robot speak text in *its own* TTS voice
   via the cloud) — `talk` plays *your* audio through its speaker.
 
 ## 0.16.12 — audio WORKS 🎉 (and honest watchdog)
@@ -366,7 +379,7 @@ exposed the useful ones as first-class Home Assistant entities.
   on a call / upgrading…), plus diagnostics: camera & MCU **firmware versions**, robot **IP**
   and **WiFi SSID**.
 - The camera-setting selects (quality/style/mode) show and set the robot's real current value.
-- Everything still routes over Agora RTM, the same channel as before. The raw `ebo_air2/cmd`
+- Everything still routes over Agora RTM, the same channel as before. The raw `ebo/cmd`
   escape hatch remains for any opcode not given its own entity.
 - A few controls with complex payloads (eyes, AI track, ask-AI, roaming) are best-effort from
   the decompiled builder; if one misbehaves, the raw `cmd` channel gives exact control.
@@ -382,7 +395,7 @@ exposed the useful ones as first-class Home Assistant entities.
 ## 0.13.5 — finer driving + joystick channel
 - **Gentler move buttons** (A): each tap is a shorter, smaller nudge — turns no longer spin
   ~90° per press, forward/back are softer.
-- **Joystick channel** (B): new MQTT topic `ebo_air2/joystick` accepting `{"x":-1..1,"y":-1..1}`
+- **Joystick channel** (B): new MQTT topic `ebo/joystick` accepting `{"x":-1..1,"y":-1..1}`
   for smooth, continuous driving from a joystick card (x = turn, y = forward). Pair it with the
   EBO joystick Lovelace card. (Cloud latency still applies.)
 
@@ -435,7 +448,7 @@ exposed the useful ones as first-class Home Assistant entities.
 - New controls (verified against the app): **motion recording** (switch), **auto-record calls**
   (switch), **cloud upload** (switch, privacy), **talkback volume** (number). The recording/
   volume ones show real state from the robot's settings report.
-- Eyes/emoji, DND and other complex settings stay on the raw `ebo_air2/cmd` channel (they need
+- Eyes/emoji, DND and other complex settings stay on the raw `ebo/cmd` channel (they need
   structured payloads) — see COMANDI.md.
 
 ## 0.10.0 — video CPU: resolution/quality options
@@ -546,7 +559,7 @@ exposed the useful ones as first-class Home Assistant entities.
 
 ## 0.4.x
 - Full command catalog exposed as entities: **sleep**, **say** (TTS), **volume**, **return to
-  base**, plus a raw `ebo_air2/cmd` channel to send any opcode (for automations / AI).
+  base**, plus a raw `ebo/cmd` channel to send any opcode (for automations / AI).
 - **Clean shutdown** (no more "error" on stop; logs stay readable).
 - Renamed add-on to **Enabot integration**; repository is now the multi-add-on
   **Playcolors.co** collection.

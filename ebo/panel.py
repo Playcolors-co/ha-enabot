@@ -85,7 +85,7 @@ def _robot(node):
 
 def _on_connect(client, userdata, flags, rc, properties=None):
     log("[panel] MQTT connected rc=%s" % rc)
-    for t in ("ebo_air2/discovery/#", "+/status", "+/state", "+/camera/state", "+/camera/url"):
+    for t in ("ebo/discovery/#", "+/status", "+/state", "+/camera/state", "+/camera/url"):
         client.subscribe(t)
 
 
@@ -93,7 +93,7 @@ def _on_message(client, userdata, msg):
     try:
         topic = msg.topic
         payload = msg.payload.decode("utf-8", "replace")
-        if topic.startswith("ebo_air2/discovery/"):
+        if topic.startswith("ebo/discovery/"):
             data = json.loads(payload) if payload else {}
             node = data.get("node") or topic.rsplit("/", 1)[-1]
             with _lock:
@@ -102,8 +102,8 @@ def _on_message(client, userdata, msg):
             return
         node = topic.split("/", 1)[0]
         # the +/status, +/state wildcards also catch non-EBO topics (e.g. homeassistant/status) —
-        # only track real EBO nodes (from discovery, or the ebo_air2 prefix).
-        if node not in _robots and not node.startswith("ebo_air2"):
+        # only track real EBO nodes (from discovery, or the ebo prefix).
+        if node not in _robots and not node.startswith("ebo"):
             return
         leaf = topic[len(node) + 1:]
         with _lock:

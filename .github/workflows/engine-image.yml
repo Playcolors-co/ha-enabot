@@ -40,7 +40,7 @@ jobs:
       - name: Build and push (amd64)
         uses: docker/build-push-action@v6
         with:
-          context: ./ebo_air2
+          context: ./ebo
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

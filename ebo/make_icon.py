@@ -78,7 +78,7 @@ def draw_ebo(size, with_bg=True):
 
 # icon 512
 icon=draw_ebo(512, with_bg=True).resize((512,512), Image.LANCZOS)
-icon.save("addon/ebo_air2/icon.png")
+icon.save("addon/ebo/icon.png")
 print("icon.png", icon.size)
 
 # wide logo with text
@@ -91,13 +91,13 @@ d=ImageDraw.Draw(logo)
 def font(sz):
     for p in ["/System/Library/Fonts/SFNSRounded.ttf","/System/Library/Fonts/HelveticaNeue.ttc","/System/Library/Fonts/Helvetica.ttc","/Library/Fonts/Arial.ttf"]:
         try: return ImageFont.truetype(p, sz)
-        except: pass
+        except Exception: pass
     return ImageFont.load_default()
 tx=(LH-20)*S2
 d.text((tx, 90*S2), "EBO Air 2", font=font(150), fill=(238,246,247,255))
 d.text((tx+4, 210*S2), "Home Assistant", font=font(64), fill=(64,232,232,255))
 logo=logo.resize((LW,LH), Image.LANCZOS)
-logo.save("addon/ebo_air2/logo.png")
+logo.save("addon/ebo/logo.png")
 print("logo.png", logo.size)
 
 # --- logo v2: teal background like the icon, white text ---
@@ -115,5 +115,5 @@ tx=(LH-10)*S2
 d.text((tx, 96*S2), "EBO Air 2", font=font(150), fill=(240,248,249,255))
 d.text((tx+4, 214*S2), "per Home Assistant", font=font(62), fill=(72,236,236,255))
 logo=logo.resize((LW,LH), Image.LANCZOS)
-logo.save("addon/ebo_air2/logo.png")
+logo.save("addon/ebo/logo.png")
 print("logo.png v2", logo.size)

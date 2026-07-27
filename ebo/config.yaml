@@ -1,6 +1,6 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.25.2"
-slug: ebo_air2
+version: "0.26.0"
+slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
 # Reverse-engineered, unofficial, undocumented cloud API: mark as experimental.
@@ -27,11 +27,14 @@ ports_description:
   8098/tcp: "Data API for the Enabot integration — internal, no need to change"
 # Our base is python:3.11-slim (not an HA base image with s6): disable HA init.
 init: false
-# Request the Supervisor MQTT service: the broker credentials are provided automatically.
-services:
-  - mqtt:need
+# No external MQTT: the internal bus runs on a mosquitto bound to 127.0.0.1 inside the container,
+# so the user needs no broker and no MQTT integration. Entities are native (the EBO integration).
 # Allow querying the Supervisor for the host IP (to show the exact RTSP camera URL).
 hassio_api: true
+# Write access to Home Assistant's config dir, so the add-on can install its companion integration
+# into /homeassistant/custom_components/ebo (no HACS needed). Only that folder is touched.
+map:
+  - homeassistant_config:rw
 # The Ingress panel edits this add-on's own options (log level, video quality…) and restarts it.
 hassio_role: manager
 # Sidebar web panel (Zigbee2MQTT-style): manage all robots from one place. Served via Ingress.
@@ -46,12 +49,11 @@ options:
   password: ""
   payload_key: ""
   sign_key: ""
-  expose_mqtt: true
 schema:
   email: str
   password: password
   payload_key: password
   sign_key: password
-  # on  = robots appear as MQTT-discovered entities (standalone add-on use)
-  # off = robots are owned as native devices by the Enabot integration (set for you by it)
-  expose_mqtt: bool?
+  # token the companion integration uses to read this add-on's data API. Auto-generated if empty;
+  # persisted here so the integration can read it via the Supervisor. You don't need to set it.
+  api_token: str?

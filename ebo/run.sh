@@ -48,21 +48,34 @@ export EBO_VIDEO_MAX_HEIGHT="$(pget video_max_height 720)"
 export EBO_VIDEO_FPS="$(pget video_fps 20)"
 export EBO_VIDEO_BITRATE="$(pget video_bitrate 2500)"
 export EBO_VIDEO_PRESET="$(pget video_preset ultrafast)"
-# expose HA entities over MQTT discovery (on) or leave them to the native integration (off).
-# Driven by the add-on option so the Enabot integration can flip it via Supervisor; the robot's
-# integration-discovery message is published regardless, so native devices always appear.
-[ "$(jq -r '.expose_mqtt // true' "$OPTS")" = "false" ] && export EBO_EXPOSE_MQTT=0 || export EBO_EXPOSE_MQTT=1
+# Native-only: never publish HA entity discovery. The internal MQTT bus (localhost) is just glue
+# between the bridges and the panel; Home Assistant gets everything from the companion integration.
+export EBO_EXPOSE_MQTT=0
 ROBOT_ID="$(pget robot_id 0)"
 [ "$ROBOT_ID" != "0" ] && export EBO_ROBOT_ID="$ROBOT_ID"
 
 # API token for the native integration to read the panel's data API (persisted in /data)
+# Prefer a token pinned via env (standalone) or the add-on option; else reuse the persisted one;
+# else generate. When on Supervisor and the option is empty, persist it back to the add-on options
+# so the companion integration can read it (via the Supervisor) and reach the data API — no MQTT.
+OPT_TOKEN="$(jq -r '.api_token // empty' "$OPTS" 2>/dev/null)"
 if [ -n "${EBO_API_TOKEN:-}" ]; then
-  # standalone: let the user pin the token via env (no need to docker exec to read it)
   echo "$EBO_API_TOKEN" > /data/api_token 2>/dev/null || true
+elif [ -n "$OPT_TOKEN" ]; then
+  echo "$OPT_TOKEN" > /data/api_token 2>/dev/null || true
 elif [ ! -f /data/api_token ]; then
   head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' > /data/api_token 2>/dev/null || true
 fi
 export EBO_API_TOKEN="$(cat /data/api_token 2>/dev/null || echo "${EBO_API_TOKEN:-}")"
+if [ -z "$OPT_TOKEN" ] && [ -n "${SUPERVISOR_TOKEN:-}" ] && [ -n "$EBO_API_TOKEN" ]; then
+  # Merge: send the FULL options (Supervisor replaces the whole block) so we don't wipe the login.
+  MERGED="$(jq -n --arg e "$EBO_EMAIL" --arg p "$EBO_PASSWORD" --arg pk "$EBO_PAYLOAD_KEY" \
+                  --arg sk "$EBO_SIGN_KEY" --arg t "$EBO_API_TOKEN" \
+                  '{options:{email:$e,password:$p,payload_key:$pk,sign_key:$sk,api_token:$t}}')"
+  curl -sf -X POST -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" -H "Content-Type: application/json" \
+    -d "$MERGED" http://supervisor/addons/self/options >/dev/null 2>&1 \
+    && echo "[add-on] persisted api_token to options (readable by the integration)" || true
+fi
 export EBO_API_PORT="${EBO_API_PORT:-8098}"
 # Home Assistant core reaches the add-on's API over the internal Supervisor network by hostname
 # (works regardless of LAN/VLAN firewalls, unlike the host IP). Fall back to the container IP.
@@ -89,18 +102,19 @@ if [ -z "$EBO_PAYLOAD_KEY" ] || [ -z "$EBO_SIGN_KEY" ]; then
   exit 1
 fi
 
-# --- MQTT from the Supervisor ---
-if [ -n "$SUPERVISOR_TOKEN" ]; then
-  MQTT_JSON="$(curl -sf -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" http://supervisor/services/mqtt || true)"
-  if [ -n "$MQTT_JSON" ]; then
-    export EBO_MQTT_HOST="$(echo "$MQTT_JSON" | jq -r '.data.host')"
-    export EBO_MQTT_PORT="$(echo "$MQTT_JSON" | jq -r '.data.port')"
-    export EBO_MQTT_USER="$(echo "$MQTT_JSON" | jq -r '.data.username // empty')"
-    export EBO_MQTT_PASS="$(echo "$MQTT_JSON" | jq -r '.data.password // empty')"
-    echo "[add-on] MQTT from Supervisor: ${EBO_MQTT_HOST}:${EBO_MQTT_PORT}"
-  fi
+# --- internal MQTT bus: a mosquitto bound to localhost, private to this container ---
+# It's just the glue between the bridge processes and the panel. Home Assistant never sees it
+# (no external broker, no MQTT integration needed). Overridable by env for standalone/testing.
+if [ -z "${EBO_MQTT_HOST:-}" ] && command -v mosquitto >/dev/null 2>&1; then
+  printf 'listener 1883 127.0.0.1\nallow_anonymous true\npersistence false\n' > /data/mosquitto.conf
+  mosquitto -c /data/mosquitto.conf -d 2>/dev/null || mosquitto -d 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    (exec 3<>/dev/tcp/127.0.0.1/1883) 2>/dev/null && { exec 3>&- 3<&-; break; }
+    sleep 0.2
+  done
+  echo "[add-on] internal MQTT bus on 127.0.0.1:1883 (private to the add-on)"
 fi
-: "${EBO_MQTT_HOST:=core-mosquitto}"
+: "${EBO_MQTT_HOST:=127.0.0.1}"
 : "${EBO_MQTT_PORT:=1883}"
 export EBO_MQTT_HOST EBO_MQTT_PORT
 
@@ -129,6 +143,23 @@ if [ "$CODE_VER" = "$INST_VER" ]; then
   echo "[add-on] version ${CODE_VER} (running code matches installed)"
 else
   echo "[add-on] ⚠ version MISMATCH: running code=${CODE_VER}, Supervisor installed=${INST_VER} — the image was NOT rebuilt (stale). Try: uninstall + reinstall the add-on."
+fi
+
+# --- install the companion integration into Home Assistant (no HACS) ---
+# The image bundles it; copy it into <ha-config>/custom_components/ebo so HA can load it. A new
+# custom component needs ONE Home Assistant restart to be picked up (logged for the user).
+# The config dir is mounted at /homeassistant (homeassistant_config map) or /config on older setups.
+HA_ROOT=""
+for d in /homeassistant /config; do [ -d "$d" ] && { HA_ROOT="$d"; break; }; done
+HA_CC="$HA_ROOT/custom_components"
+if [ -d /app/ha_integration/custom_components/ebo ] && [ -n "$HA_ROOT" ]; then
+  mkdir -p "$HA_CC"
+  if cp -r /app/ha_integration/custom_components/ebo "$HA_CC/ebo.tmp" 2>/dev/null; then
+    rm -rf "$HA_CC/ebo" && mv "$HA_CC/ebo.tmp" "$HA_CC/ebo"
+    echo "[add-on] installed the EBO integration into ${HA_CC}/ebo"
+    echo "[add-on] → FIRST TIME: restart Home Assistant once, then Settings → Devices & Services"
+    echo "[add-on]   → + Add Integration → 'EBO' (it finds your robots automatically, nothing to type)."
+  fi
 fi
 
 echo "[add-on] starting Enabot integration bridge (region ${EBO_REGION})"
@@ -175,7 +206,7 @@ run_robot() {
       [ -n "$id" ] && export EBO_ROBOT_ID="$id"
       export EBO_DEVICE_NAME="$name"    # always use the robot's real (account) name
       if [ "$NR" -gt 1 ]; then          # distinct node/port/path only when there's more than one
-        export EBO_NODE="ebo_air2_${id}" EBO_RTSP_PATH="ebo_${id}" \
+        export EBO_NODE="ebo_${id}" EBO_RTSP_PATH="ebo_${id}" \
                EBO_RTSP_PORT="$((8554 + idx))"
       fi
       exec python /app/ebo_bridge.py

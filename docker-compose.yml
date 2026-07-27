@@ -6,7 +6,7 @@ services:
   ebo-engine:
     image: ghcr.io/playcolors-co/ebo-engine:latest
     # No public image yet / want to build from source? clone this repo and use:
-    # build: ./ebo_air2
+    # build: ./ebo
     platform: linux/amd64          # required: the Agora SDK is x86_64 only
     container_name: ebo-engine
     restart: unless-stopped
@@ -15,6 +15,9 @@ services:
       - "8098:8098"                # data API for the HA integration (token-guarded)
     volumes:
       - ./data:/data               # persists options + api_token
+      # Mount your Home Assistant config dir so the engine installs its integration into
+      # custom_components/ebo for you (then restart HA once, and Add Integration → EBO → manual).
+      # - /path/to/homeassistant/config:/homeassistant
     environment:
       # --- your Enabot account (like the EBO HOME app) ---
       EBO_EMAIL: "you@example.com"
@@ -24,10 +27,5 @@ services:
       EBO_SIGN_KEY: "your-sign-key"
       # --- API token you choose (used by the HA integration's manual step) ---
       EBO_API_TOKEN: "change-me-to-a-long-random-string"
-      # native devices (no MQTT). Set to "true" only if you actually want MQTT entities.
-      EBO_EXPOSE_MQTT: "false"
       # your HA/host LAN IP, so the RTSP camera URL is correct (no Supervisor to auto-detect it)
       EBO_HOST_IP: "192.168.1.50"
-      # optional: an MQTT broker, only if EBO_EXPOSE_MQTT=true
-      # EBO_MQTT_HOST: "192.168.1.50"
-      # EBO_MQTT_PORT: "1883"
