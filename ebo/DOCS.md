@@ -87,6 +87,26 @@ The **video** is a low-latency RTSP stream (H.265 → H.264) on port **8554**; t
 it as **WebRTC** via HA's stream/go2rtc. Turning the camera on **wakes** the robot from standby,
 like the app.
 
+## Fluid video & smooth driving (important)
+
+The robot streams **H.265**, which browsers can't decode directly, so the add-on **re-encodes to
+H.264** in real time on your Home Assistant host. Two settings decide whether that stays fluid — the
+defaults are already correct, but if the video is **choppy or laggy**, check these:
+
+- **Encoder preset = `ultrafast`** (panel → ⚙ Settings → *Video encoder preset*). This is the default
+  and the **recommended** value. Heavier presets (`fast`, `faster`, …) look nicer but are too slow to
+  re-encode in real time on typical HA hosts (especially low-core NUCs/mini-PCs) — the encoder falls
+  behind, frames pile up, and the video lags by **seconds**. Keep it on `ultrafast`.
+- **Video quality for live/driving = `Low` or `Medium`** (per-robot select, or the robot detail page).
+  At **High** the robot sends **2304×1296 (3 MP)** — far too much to re-encode live on most hosts, so
+  the picture lags. At **Low (848×480)** the encoder keeps up at a full ~25 fps with ~200 ms latency.
+  - You don't have to think about this while **driving**: the panel's **fullscreen drive view
+    automatically switches to Low** for smooth, low-latency control and **restores your quality** when
+    you exit. High is fine for occasional still viewing; just expect lag if you watch it live at High.
+
+Rule of thumb: **`ultrafast` preset + `Low`/`Medium` quality = fluid**. If you have a powerful host you
+can raise the quality; if it's still choppy, lower it.
+
 ## Driving from automations / AI
 
 Besides the buttons, publish an analog movement vector:
@@ -122,8 +142,11 @@ should only be used when you can see it.
   the integration the add-on installed), then **+ Add Integration → "EBO"**. Check the add-on log
   for the "installed the EBO integration" line.
 - **Robot doesn't respond** → make sure the EBO HOME app isn't controlling the same account.
-- **Camera blank in the panel** → the preview is a smooth snapshot; for full live video use the
-  camera entity (WebRTC) from the native integration.
+- **Video is choppy or lags by seconds** → see **Fluid video & smooth driving** above: keep the
+  encoder preset on `ultrafast` and use `Low`/`Medium` video quality. High (3 MP) is too heavy to
+  re-encode live on most hosts.
+- **Camera blank in the panel** → the robot must be awake and the camera on; open the robot (or the
+  fullscreen drive view) to wake it. The list thumbnail is the last frame before standby.
 
 ## Support
 

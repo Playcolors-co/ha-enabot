@@ -28,6 +28,13 @@ RUN curl -fsSL --retry 5 --retry-delay 3 \
       | tar xz -C /usr/local/bin mediamtx \
     || echo "WARN: mediamtx download failed — video will be unavailable"
 
+# hls.js: the panel plays the Low-Latency HLS in a <video> (served same-origin through Ingress, so
+# no nested-iframe CSP issue). Non-fatal: if it's missing the panel falls back to snapshots.
+ARG HLSJS_VERSION=1.5.15
+RUN mkdir -p /app && curl -fsSL --retry 5 --retry-delay 3 \
+      "https://cdn.jsdelivr.net/npm/hls.js@${HLSJS_VERSION}/dist/hls.min.js" -o /app/hls.min.js \
+    || echo "WARN: hls.js download failed — panel drive video falls back to snapshots"
+
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/agora/agora_sdk
 WORKDIR /app
 # The version changes every release, so this COPY layer is never stale-cached: the running

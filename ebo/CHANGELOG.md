@@ -1,5 +1,37 @@
 # Changelog — Enabot integration
 
+## 0.26.13 — fluid drive video that works through Ingress (hls.js + proxy)
+- The 0.26.12 fluid HLS was black in the panel because HA's Ingress blocks the nested iframe. Now the
+  fullscreen 'drive' view plays the Low-Latency HLS in a **<video> via hls.js**, with the stream
+  **proxied through the add-on/Ingress** (same origin) — so it plays fluidly inside the panel, no
+  CSP/CORS trouble. Falls back to the snapshot preview if hls.js is unavailable.
+
+
+## 0.26.12 — FLUID drive video (Low-Latency HLS) in fullscreen
+- The fullscreen 'drive' view now plays the robot's **Low-Latency HLS** stream (mediamtx) instead of
+  choppy snapshots → **fluid, ~0.5-1s latency** video for actually driving. Served on port 8888
+  (per robot), reachable directly from your browser (HTTP, no WebRTC/ICE hassle). List/detail
+  thumbnails stay on snapshots (fine for previews).
+
+
+## 0.26.11 — lower-latency preview, wake-on-drive, keyboard driving fixed
+- **Video latency:** reverted the persistent MJPEG feeder (it buffered → laggy). Back to fresh
+  per-frame grabs with `nobuffer`/`low_delay`/tiny probe, short 0.25 s cache, and a shorter RTSP
+  keyframe interval (~1 s) → fresher frames for driving.
+- **Wake on drive (like the app):** opening a robot or entering the fullscreen gamepad now sends
+  **camera-on + wake**, and keeps the robot awake (re-wakes every 15 s while you're driving), so it
+  doesn't drop back to the sleeping (Zz) state.
+- **Keyboard driving fixed:** the fullscreen view now takes keyboard focus, so the **arrow keys /
+  WASD** actually drive the robot.
+
+
+## 0.26.10 — low-latency panel preview (persistent MJPEG feeder)
+- The panel preview used to spawn a fresh ffmpeg per frame (reconnecting to RTSP each time → ~2 fps,
+  laggy). Now a **single persistent ffmpeg** keeps the latest frame in memory, so snapshots are
+  instant and the preview runs ~10-15 fps at low latency (much better for driving). The feeder
+  auto-stops when nobody's watching. Fullscreen refresh 120 ms, list/detail 250 ms.
+
+
 ## 0.26.9 — CRITICAL FIX: no commands worked in native mode (missing subscriptions)
 - The bridge's **command topic subscriptions** were located AFTER the `expose_mqtt` gate inside the
   discovery method. Since native mode (the default since 0.26.0) sets `expose_mqtt: off`, that method

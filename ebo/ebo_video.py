@@ -56,6 +56,21 @@ class VideoPipeline(IVideoFrameObserver):
         self.w = 0
         self.h = 0
         self.frames = 0
+        self._last_frame = 0.0        # wall-clock of the last decoded frame (liveness: robot awake?)
+        # LATENCY CONTROL: on_frame does NOT write to ffmpeg directly (a blocking write while ffmpeg
+        # is behind would make decoded frames pile up in the Agora SDK and the delay grow without
+        # bound). Instead it drops the newest frame into a single slot (overwriting = dropping any
+        # older un-encoded frame) and a dedicated writer thread feeds ffmpeg. Result: we always
+        # encode the FRESHEST frame ffmpeg can accept and simply skip the ones in between — latency
+        # stays bounded (at the cost of fps when the CPU can't keep up), which is what you want for
+        # driving.
+        self._pending = None          # (y,u,v,w,h) latest frame awaiting encode; overwrite=drop
+        self._pending_evt = threading.Event()
+        self._writer = None
+        self._dropped = 0
+        self._src_count = 0           # source/encoded frame counters for the fps diagnostic
+        self._enc_count = 0
+        self._src_t0 = 0.0
         self.feeding = False          # only pipe to ffmpeg while the camera switch is on
         self.lock = threading.Lock()
         self._start_mediamtx()
@@ -65,10 +80,45 @@ class VideoPipeline(IVideoFrameObserver):
         # per-instance temp file: a fixed /tmp path would (a) be a predictable-path smell and
         # (b) COLLIDE when the add-on runs one bridge per robot (multi-robot). Key it by port.
         cfg = os.path.join(tempfile.gettempdir(), "ebo_mediamtx_%d.yml" % self.rtsp_port)
+        # Low-Latency HLS for a FLUID browser preview (the snapshot path is choppy). HTTP-based, so
+        # it works straight through the add-on's mapped port — no WebRTC/ICE finickiness. ~0.5-1s.
+        self.hls_port = 8888 + (self.rtsp_port - 8554)
+        # WebRTC (WHEP): the panel's fullscreen 'drive' view plays this for a TRULY fluid, ~200 ms
+        # preview (much better than HLS for actually driving). The robot's H.265 is already
+        # re-encoded to H.264 here, which the browser CAN decode over WebRTC. ICE candidates use the
+        # host's real LAN IPs (below) so the browser reaches us even across NIC/VLAN boundaries.
+        self.webrtc_port = 8189 + (self.rtsp_port - 8554)
+        ice_hosts = [ip.strip() for ip in
+                     os.environ.get("EBO_HOST_IPS", "").split(",") if ip.strip()]
+        # de-dup, keep order; a YAML flow list "[a, b]" (empty -> mediamtx auto-detects interfaces)
+        seen, hosts = set(), []
+        for ip in ice_hosts:
+            if ip not in seen:
+                seen.add(ip)
+                hosts.append(ip)
+        additional_hosts = ("[" + ", ".join(hosts) + "]") if hosts else "[]"
         with open(cfg, "w") as f:
             f.write("logLevel: error\n"
                     f"rtspAddress: :{self.rtsp_port}\n"
+                    "hls: yes\n"
+                    f"hlsAddress: :{self.hls_port}\n"
+                    "hlsVariant: lowLatency\n"
+                    # only mux HLS when a client actually asks for it (fallback). Always-remux would
+                    # burn CPU generating HLS even while everyone is on the fluid WebRTC path.
+                    "hlsAlwaysRemux: no\n"
+                    "hlsSegmentCount: 7\n"
+                    "hlsSegmentDuration: 1s\n"
+                    "hlsPartDuration: 200ms\n"
+                    "hlsAllowOrigin: '*'\n"
+                    "webrtc: yes\n"
+                    f"webrtcAddress: :{self.webrtc_port}\n"
+                    f"webrtcLocalUDPAddress: :{self.webrtc_port}\n"
+                    f"webrtcAdditionalHosts: {additional_hosts}\n"
+                    "webrtcAllowOrigin: '*'\n"
+                    "webrtcICEServers2: []\n"
+                    "rtmp: no\n"
                     "paths:\n  all_others:\n")
+        log("[video] WebRTC(WHEP) on :%d — ICE hosts %s" % (self.webrtc_port, additional_hosts))
         try:
             self.mediamtx = subprocess.Popen(
                 ["/usr/local/bin/mediamtx", cfg],
@@ -82,7 +132,7 @@ class VideoPipeline(IVideoFrameObserver):
     # ---- ffmpeg: raw I420 in -> H.264 RTSP out ----
     def _start_ffmpeg(self, w, h):
         self._stop_ffmpeg()
-        gop = max(self.fps, 1) * 2       # a keyframe every ~2s so clients attach quickly
+        gop = max(self.src_fps, 1)       # a keyframe every ~1s at the source rate
         scale = []
         if self.max_h and h > self.max_h:
             scale = ["-vf", "scale=-2:%d" % self.max_h]   # keep aspect, even width
@@ -101,15 +151,17 @@ class VideoPipeline(IVideoFrameObserver):
                         "-ar", str(self.audio_rate), "-ac", "1", "-i", "pipe:%d" % a_r]
             audio_out = ["-c:a", "aac", "-b:a", "48k"]
             pass_fds = (a_r,)
+        _nullout = os.environ.get("EBO_VIDEO_NULLOUT") == "1"   # DIAG: encode to null (isolate mediamtx)
         self.ff = subprocess.Popen([
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             # low latency: timestamp frames by arrival (clean monotonic DTS/PTS — fixes the
-            # "No dts" issue) and DON'T resample the frame rate (forcing CFR buffered/dropped
-            # frames and added delay). The robot streams ~25 fps.
-            "-fflags", "+genpts+nobuffer", "-flags", "+low_delay",
-            "-use_wallclock_as_timestamps", "1",
+            # Clean, MONOTONIC input timestamps from the raw framerate. Do NOT use
+            # -use_wallclock_as_timestamps: under bursty feeding it hands ffmpeg duplicate/
+            # non-monotonic DTS ("124 >= 124") that stall the encoder. rawvideo from a pipe is not
+            # throttled by -framerate — it only assigns even PTS. The robot streams ~25 fps.
+            "-fflags", "+nobuffer", "-flags", "+low_delay",
             "-f", "rawvideo", "-pixel_format", "yuv420p",
-            "-video_size", "%dx%d" % (w, h), "-framerate", str(self.fps),
+            "-video_size", "%dx%d" % (w, h), "-framerate", str(self.src_fps),
             "-i", "pipe:0",
         ] + audio_in + scale + [
             "-c:v", "libx264", "-preset", self.preset, "-tune", "zerolatency",
@@ -120,8 +172,15 @@ class VideoPipeline(IVideoFrameObserver):
             ["-maxrate", "%dk" % self.bitrate, "-bufsize", "%dk" % (self.bitrate * 2)]
             if self.bitrate > 0 else []
         ) + audio_out + [
-            "-f", "rtsp", "-rtsp_transport", "tcp", self.rtsp_url,
-        ], stdin=subprocess.PIPE, pass_fds=pass_fds)
+            # low muxer delay for latency. NB: do NOT add -flush_packets 1 here — over RTSP/TCP it
+            # forces per-packet writes that stall ffmpeg's output and starve the encoder (throughput
+            # collapsed to ~5 fps). muxdelay/muxpreload 0 is enough.
+            "-muxdelay", "0", "-muxpreload", "0",
+        ] + (["-f", "null", "-"] if _nullout else
+             ["-f", "rtsp", "-rtsp_transport", "tcp", self.rtsp_url]),
+            stdin=subprocess.PIPE, pass_fds=pass_fds)
+        if _nullout:
+            log("[video] DIAG: ffmpeg output = NULL (mediamtx bypassed)")
         if a_r is not None:
             os.close(a_r)             # parent drops the read end (ffmpeg owns it)
             os.set_blocking(self._a_w, False)   # never block the SDK audio thread
@@ -179,6 +238,11 @@ class VideoPipeline(IVideoFrameObserver):
             except (BlockingIOError, BrokenPipeError, OSError):
                 pass
 
+    def is_streaming(self):
+        """True when live frames are actually arriving — i.e. the robot is awake and publishing.
+        Used to decide whether turning the camera on needs a fresh RTC re-join to WAKE the robot."""
+        return self.feeding and self.frames > 0 and (time.time() - self._last_frame) < 3.0
+
     # ---- camera switch ----
     def start_feed(self):
         with self.lock:
@@ -189,6 +253,38 @@ class VideoPipeline(IVideoFrameObserver):
             self.feeding = False
             self._stop_ffmpeg()
             self.w = self.h = 0
+
+    def _ensure_writer(self):
+        if self._writer is None or not self._writer.is_alive():
+            self._writer = threading.Thread(target=self._writer_loop, daemon=True)
+            self._writer.start()
+
+    def _writer_loop(self):
+        """The ONLY thread that writes YUV to ffmpeg's stdin. Blocking writes live here, off the
+        Agora callback thread, so a slow encoder drops frames (via the 1-slot buffer) instead of
+        backing up and inflating latency."""
+        while True:
+            try:
+                if not self._pending_evt.wait(0.5):
+                    continue
+                self._pending_evt.clear()
+                with self.lock:
+                    item = self._pending
+                    self._pending = None
+                    ff = self.ff
+                if item is None or ff is None or ff.stdin is None:
+                    continue
+                y, u, v = item[0], item[1], item[2]
+                try:
+                    ff.stdin.write(y)
+                    ff.stdin.write(u)
+                    ff.stdin.write(v)
+                except (BrokenPipeError, ValueError, OSError):
+                    with self.lock:
+                        if self.ff is ff:
+                            self._stop_ffmpeg()
+            except Exception as e:
+                log("[video] writer error:", e)
 
     # ---- Agora callback: one decoded YUV frame ----
     def on_frame(self, channel_id, remote_uid, frame):
@@ -206,30 +302,51 @@ class VideoPipeline(IVideoFrameObserver):
                     self.w, self.h = w, h
                     self.frames = 0
                     self._dec_acc = 0
-                elif self.fps < self.src_fps:
-                    # decimate: keep ~fps of every src_fps source frames (cuts encode CPU)
-                    self._dec_acc += self.fps
-                    if self._dec_acc < self.src_fps:
-                        return 0                     # drop this frame
-                    self._dec_acc -= self.src_fps
+                    self._pending = None
+                    self._ensure_writer()
+                # NOTE: no fixed frame decimation. At a sane resolution the encoder keeps up, so we
+                # want EVERY source frame for smoothness; the 1-slot buffer already drops frames only
+                # when the encoder actually falls behind (adaptive). Fixed decimation just threw away
+                # good frames and made the video choppier than the source.
+                self._src_count += 1              # every decoded frame (source rate diagnostic)
+                now = time.time()
+                if self._src_t0 == 0.0:
+                    self._src_t0 = now
+                elif now - self._src_t0 >= 5.0:
+                    log("[video] source ~%.1f fps, encoded ~%.1f fps, %d dropped (encoder behind)"
+                        % (self._src_count / (now - self._src_t0),
+                           self._enc_count / (now - self._src_t0), self._dropped))
+                    self._src_t0 = now
+                    self._src_count = 0
+                    self._enc_count = 0
+                    self._dropped = 0
+                # If the writer thread hasn't consumed the previous frame yet, ffmpeg is still busy —
+                # DROP this frame *before* the expensive plane copy (packing a 3 MP frame just to
+                # overwrite it wastes the very CPU ffmpeg needs). Dropping early keeps latency bounded
+                # AND frees CPU for the encoder, so the frames we DO keep encode faster.
+                if self._pending is not None:
+                    self._dropped += 1
+                    self._last_frame = time.time()   # still a live frame → robot is awake
+                    return 0
                 y = _pack_plane(frame.y_buffer, frame.y_stride or w, w, h)
                 u = _pack_plane(frame.u_buffer, frame.u_stride or (w // 2), w // 2, h // 2)
                 v = _pack_plane(frame.v_buffer, frame.v_stride or (w // 2), w // 2, h // 2)
-                try:
-                    self.ff.stdin.write(y)
-                    self.ff.stdin.write(u)
-                    self.ff.stdin.write(v)
-                except (BrokenPipeError, ValueError):
-                    self._stop_ffmpeg()
-                    return 0
+                self._pending = (y, u, v, w, h)
+                self._enc_count += 1
                 self.frames += 1
-                if self.frames == 1:
-                    log("[video] first decoded frame %dx%d (pix_type=%s) — encoding to RTSP"
-                        % (w, h, getattr(frame, "type", "?")))
-                elif self.frames % 4500 == 0:     # light heartbeat (~every few minutes)
-                    log("[video] streaming — %d frames (%dx%d)" % (self.frames, w, h))
-                elif self.frames % 300 == 0:      # detailed, only in debug
-                    log("[video] %d frames received" % self.frames, level="debug")
+                self._last_frame = time.time()
+                first = self.frames == 1
+                nframes = self.frames
+            self._pending_evt.set()
+            if first:
+                log("[video] first decoded frame %dx%d (pix_type=%s) strides y=%s u=%s v=%s "
+                    "(w=%d → %s) — encoding to RTSP"
+                    % (w, h, getattr(frame, "type", "?"), frame.y_stride, frame.u_stride,
+                       frame.v_stride, w, "PADDED (slow unpack!)" if (frame.y_stride or w) != w
+                       else "no padding"))
+            elif nframes % 4500 == 0:         # light heartbeat (~every few minutes)
+                log("[video] streaming — %d frames (%dx%d), %d dropped for latency"
+                    % (nframes, w, h, self._dropped))
         except Exception as e:
             log("[video] frame error:", e)
         return 0

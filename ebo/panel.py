@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -279,21 +280,22 @@ def _snapshot(node):
         return None
     now = time.time()
     ts, cached = _snap_cache.get(node, (0, None))
-    if cached and now - ts < 0.8:
+    if cached and now - ts < 0.25:          # short cache: keep frames FRESH (low latency > fps)
         return cached
-    # one grab per node at a time — concurrent requests get the last frame (no ffmpeg pile-up)
     lock = _snap_lock.setdefault(node, threading.Lock())
-    if not lock.acquire(blocking=False):
+    if not lock.acquire(blocking=False):    # one grab per node at a time (no ffmpeg pile-up)
         return cached
     try:
         ts, cached = _snap_cache.get(node, (0, None))
-        if cached and time.time() - ts < 0.8:
+        if cached and time.time() - ts < 0.25:
             return cached
         p = urlparse(url)
         internal = "rtsp://127.0.0.1:%s%s" % (p.port or 8554, p.path)
+        # grab the FRESHEST frame with minimal buffering: no probe/analyze delay, no jitter buffer.
         out = subprocess.run(
-            ["ffmpeg", "-nostdin", "-rtsp_transport", "tcp", "-i", internal,
-             "-frames:v", "1", "-q:v", "6", "-f", "mjpeg", "pipe:1"],
+            ["ffmpeg", "-nostdin", "-fflags", "nobuffer", "-flags", "low_delay",
+             "-probesize", "32", "-analyzeduration", "0", "-rtsp_transport", "tcp",
+             "-i", internal, "-frames:v", "1", "-q:v", "6", "-f", "mjpeg", "pipe:1"],
             capture_output=True, timeout=8).stdout
         if out:
             _snap_cache[node] = (time.time(), out)
@@ -327,7 +329,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._authed():
             return self._send(403, json.dumps({"error": "forbidden"}))
+        # HLS proxy: play the fluid Low-Latency HLS through Ingress (same origin → no CSP/CORS
+        # trouble with a cross-origin port). /hlsp/<port>/<rest> -> 127.0.0.1:<port>/<rest>.
+        if "/hlsp/" in self.path:
+            rest = self.path.split("/hlsp/", 1)[1]
+            port, _, sub = rest.partition("/")
+            return self._proxy_hls(port, sub)
         path = urlparse(self.path).path.rstrip("/")
+        if path.endswith("/hls.min.js"):
+            try:
+                with open("/app/hls.min.js", "rb") as f:
+                    return self._send(200, f.read(), "application/javascript")
+            except Exception:
+                return self._send(404, b"", "text/plain")
         if path.endswith("/api/robots"):
             with _lock:
                 return self._send(200, json.dumps(list(_robots.values())))
@@ -346,6 +360,60 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self._mjpeg((q.get("node") or [""])[0])
         return self._send(200, PAGE, "text/html; charset=utf-8")
+
+    def _proxy_hls(self, port, sub):
+        """Forward an HLS request to the local mediamtx (127.0.0.1:<port>). Restricted to the HLS
+        ports so it can't be used as an open proxy."""
+        if not port.isdigit() or not (8888 <= int(port) <= 8891):
+            return self._send(400, b"", "text/plain")
+        url = "http://127.0.0.1:%s/%s" % (port, sub)
+        try:
+            with urllib.request.urlopen(url, timeout=20) as r:
+                data = r.read()
+                ctype = r.headers.get("Content-Type", "application/octet-stream")
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception:
+            self._send(502, b"", "text/plain")
+
+    def _proxy_whep(self, raw_path):
+        """Forward a WHEP SDP offer to the local mediamtx WebRTC endpoint and return its SDP answer.
+        Restricted to the WebRTC ports (8189-8192) so it can't be used as an open proxy."""
+        rest = raw_path.split("/whepp/", 1)[1]
+        port, _, sub = rest.partition("/")
+        if not port.isdigit() or not (8189 <= int(port) <= 8192) or not sub:
+            return self._send(400, b"", "text/plain")
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+            offer = self.rfile.read(n)
+        except Exception:
+            return self._send(400, b"", "text/plain")
+        url = "http://127.0.0.1:%s/%s/whep" % (port, sub)
+        req = urllib.request.Request(url, data=offer, method="POST")
+        req.add_header("Content-Type", "application/sdp")
+        try:
+            r = urllib.request.urlopen(req, timeout=15)
+            status, answer, ctype = r.getcode(), r.read(), \
+                r.headers.get("Content-Type", "application/sdp")
+        except urllib.error.HTTPError as e:
+            # mediamtx returns 4xx for a bad/rejected offer — relay its real status+body, not a 502,
+            # so the browser can see the actual error instead of a generic proxy failure.
+            status, answer = e.code, e.read()
+            ctype = e.headers.get("Content-Type", "text/plain")
+        except Exception as e:
+            log("[whep] proxy failed:", e)
+            return self._send(502, b"", "text/plain")
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(answer)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")   # harmless; same-origin in the panel
+        self.end_headers()
+        self.wfile.write(answer)
 
     def _mjpeg(self, node):
         """Stream a live MJPEG preview (multipart) from the robot's RTSP — smooth, no flicker."""
@@ -395,6 +463,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authed():
             return self._send(403, json.dumps({"error": "forbidden"}))
+        # WHEP (WebRTC signalling) proxy: the body is SDP, not JSON — handle before the JSON parse.
+        # /whepp/<port>/<path> -> POST http://127.0.0.1:<port>/<path>/whep. Same-origin so the panel
+        # page (behind Ingress, possibly https) never does a cross-origin/mixed-content POST.
+        raw_path = urlparse(self.path).path
+        if "/whepp/" in raw_path:
+            return self._proxy_whep(raw_path)
         path = urlparse(self.path).path.rstrip("/")
         try:
             n = int(self.headers.get("Content-Length", 0))
@@ -483,7 +557,8 @@ input[type=range]{width:100%}
 .drive .sp{flex:1;min-width:150px}
 /* fullscreen gamepad */
 #fs{position:fixed;inset:0;background:#000;z-index:9999;display:none}
-#fsvid{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+#fsvid{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000;object-fit:contain}
+.fs-tap{position:absolute;inset:0;z-index:1}   /* tap the video to show/hide controls */
 .fsx{position:absolute;top:12px;right:14px;z-index:2;background:#000a;color:#fff;border:0;border-radius:50%;width:42px;height:42px;font-size:18px;cursor:pointer}
 .fs-pad{position:absolute;left:22px;bottom:22px;z-index:2;opacity:.92}
 .fs-pad .dpad{grid-template-columns:repeat(3,68px);grid-template-rows:repeat(3,68px)}
@@ -516,8 +591,9 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
 </header>
 <div id="view"></div>
 
-<div id="fs">
-  <img id="fsvid" class="prev" data-node="" onclick="toggleFsControls()">
+<div id="fs" tabindex="0">
+  <video id="fsvid" autoplay muted playsinline></video>
+  <div class="fs-tap" onclick="toggleFsControls()"></div>
   <button class="fsx" onclick="exitFS()">✕</button>
   <div class="fs-pad" id="fs-pad"></div>
   <input class="fs-sp" id="fs-sp" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value">
@@ -559,6 +635,7 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
 
 <script>
 const B = window.location.pathname.replace(/\/$/,'');
+(function(){ const s=document.createElement('script'); s.src=B+'/hls.min.js'; s.async=true; document.head.appendChild(s); })();  // fluid HLS player
 const VQ=["Low","Medium","High"], IS=["Standard","Vivid","Soft"], EY=["Dynamic","Clock","Custom"];
 let ROBOTS=[], SEL=null;
 async function cmd(node,suffix,payload){
@@ -572,28 +649,51 @@ function meta(r){const st=r.state||{};
   return `${r.model||'EBO'} · 🔋 ${bat} · 📶 ${wifi}`;}
 function thumb(n){return `${B}/api/snapshot?node=${encodeURIComponent(n)}&t=${Math.floor(Date.now()/4000)}`}
 function bg(node,suffix,payload){ fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node,suffix,payload})}).catch(()=>{}); }
-function openRobot(n){ SEL=n; render(true); bg(n,'wake',''); }          // wake on enter
-function goBack(){ const p=SEL; SEL=null; render(true); if(p) bg(p,'sleep/set','on'); }  // standby on exit
-function driveNow(n){ SEL=n; render(true); bg(n,'wake',''); setTimeout(()=>enterFS(n),60); }
+// Enter detail/drive → camera/set on. Bridge-side this JOINS the Agora RTC channel, which WAKES
+// the robot exactly like opening the app (real viewer present). goBack → connected/set off leaves
+// the channel so the robot goes back to standby (ZZ). No unreliable isSleeping opcode dance.
+function openRobot(n){ SEL=n; render(true); bg(n,'camera/set','on'); }   // join RTC = wake (like the app)
+function goBack(){ const p=SEL; SEL=null; render(true); if(p) bg(p,'connected/set','off'); }  // leave = standby
+function driveNow(n){ SEL=n; render(true); bg(n,'camera/set','on'); setTimeout(()=>enterFS(n),60); }
 
-// --- driving: hold a D-pad button to move, release to stop (analog vector + watchdog) ---
+// --- driving: hold direction(s) to move, release to stop. MULTIPLE directions COMBINE into one
+// analog vector (move/vector carries ly=forward/back AND rx=turn together), so forward+right drives
+// a smooth diagonal instead of only the last key winning. A watchdog re-sends while held. ---
 let driveSpeed=60, moveNode=null, moveTimer=null;
-const DIRV={fwd:[-1,0],back:[1,0],left:[0,-1],right:[0,1]};
+const pressed=new Set();          // currently-held directions (keyboard and/or D-pad)
 function sendVec(node,ly,rx,hold){
   fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({node,suffix:'move/vector',payload:JSON.stringify({ly,rx,hold})})}).catch(()=>{});
 }
-function startMove(node,dir){
-  const d=DIRV[dir]; if(!d) return; stopMove(); moveNode=node;
-  const ly=Math.round(d[0]*driveSpeed), rx=Math.round(d[1]*driveSpeed);
-  sendVec(node,ly,rx,0.7); moveTimer=setInterval(()=>sendVec(node,ly,rx,0.7),350);
+function _driveTick(){
+  if(!moveNode) return;
+  let ly=0, rx=0;
+  if(pressed.has('fwd')) ly-=1;
+  if(pressed.has('back')) ly+=1;
+  if(pressed.has('left')) rx-=1;
+  if(pressed.has('right')) rx+=1;
+  if(ly===0 && rx===0){ sendVec(moveNode,0,0,0); return; }
+  // Normalize the diagonal so a two-axis press doesn't OVERDRIVE one wheel (ly+rx would sum to
+  // ~2×speed, making the robot pivot then shoot off at double speed). With normalization,
+  // forward+right becomes a smooth forward ARC (each axis ~0.7×speed) instead of a spin.
+  const mag=Math.hypot(ly,rx);
+  if(mag>1){ ly/=mag; rx/=mag; }
+  sendVec(moveNode, Math.round(ly*driveSpeed), Math.round(rx*driveSpeed), 0.7);
 }
-function stopMove(){
-  if(moveTimer){clearInterval(moveTimer);moveTimer=null;}
-  if(moveNode){sendVec(moveNode,0,0,0); moveNode=null;}
+function startMove(node,dir){       // press a direction — add it to the combined vector
+  moveNode=node;
+  if(!pressed.has(dir)){ pressed.add(dir); _driveTick(); }   // (also ignores keyboard auto-repeat)
+  if(!moveTimer) moveTimer=setInterval(_driveTick,300);      // keep-alive while any key is held
+}
+function stopMove(dir){             // release one direction; no arg = release ALL (cleanup)
+  if(dir===undefined) pressed.clear(); else pressed.delete(dir);
+  if(pressed.size===0){
+    if(moveTimer){clearInterval(moveTimer);moveTimer=null;}
+    if(moveNode) sendVec(moveNode,0,0,0);                    // stop, but keep moveNode for next press
+  } else { _driveTick(); }
 }
 function dpad(node){
-  const h=d=>`onpointerdown="event.preventDefault();this.classList.add('on');startMove('${node}','${d}')" onpointerup="this.classList.remove('on');stopMove()" onpointerleave="this.classList.remove('on');stopMove()" onpointercancel="this.classList.remove('on');stopMove()"`;
+  const h=d=>`onpointerdown="event.preventDefault();this.classList.add('on');startMove('${node}','${d}')" onpointerup="this.classList.remove('on');stopMove('${d}')" onpointerleave="this.classList.remove('on');stopMove('${d}')" onpointercancel="this.classList.remove('on');stopMove('${d}')"`;
   return `<div class="dpad">
     <button class="db up" ${h('fwd')}>▲</button>
     <button class="db left" ${h('left')}>◀</button>
@@ -606,39 +706,189 @@ function dpad(node){
 let fsTimer=null;
 function fsActions(node){
   const b=(s,p,t)=>`<button class="btn" onclick="cmd('${node}','${s}','${p}')">${t}</button>`;
-  return b('camera/set','on','📷 Camera')+b('wake','','☀ Wake')+b('laser/set','on','• Laser')+b('dock','','⌂ Dock')+b('sleep/set','on','🌙 Standby');
+  return b('camera/set','on','☀ Wake')+b('laser/set','on','• Laser')+b('dock','','⌂ Dock')+b('connected/set','off','🌙 Standby');
 }
+let wakeTimer=null;
+// Fluid video: the add-on's Low-Latency HLS, played in a <video> via hls.js, PROXIED through
+// Ingress (same origin) so no cross-origin/CSP trouble. Port 8888 = robot 1.
+function hlsSrc(node){
+  const r=ROBOTS.find(x=>x.node===node);
+  if(!r||!r.rtsp) return '';
+  try{
+    const u=new URL(r.rtsp.replace(/^rtsp:/,'http:'));
+    const port=8888+(parseInt(u.port||'8554',10)-8554);
+    const path=u.pathname.replace(/^\//,'');
+    return B+'/hlsp/'+port+'/'+path+'/index.m3u8';
+  }catch(e){ return ''; }
+}
+// WebRTC (WHEP): the robot's H.265 is re-encoded to H.264 by the add-on and served by mediamtx as
+// WebRTC. The browser CAN decode H.264 over WebRTC, giving ~200 ms FLUID video — the only path good
+// enough to actually drive. Signalling is proxied through Ingress (same origin); the media flows
+// browser<->host:8189 (UDP) directly. If ICE/WebRTC can't connect (odd network), we fall back to HLS.
+function _cleanupVid(v){
+  if(v._statTimer){ clearInterval(v._statTimer); v._statTimer=null; }
+  if(v._pc){ try{v._pc.close();}catch(e){} v._pc=null; }
+  if(v._hls){ try{v._hls.destroy();}catch(e){} v._hls=null; }
+  try{ v.srcObject=null; }catch(e){}
+  try{ v.removeAttribute('src'); v.load(); }catch(e){}
+}
+// small diagnostic badge (top-left): shows whether the live view is WebRTC (fluid) or HLS (fallback)
+// and the live decoded fps — so we can see, while driving, exactly what the video path is doing.
+function _fsBadge(txt){
+  const fs=document.getElementById('fs'); if(!fs) return;
+  let el=document.getElementById('fs-badge');
+  if(!el){ el=document.createElement('div'); el.id='fs-badge';
+    el.style.cssText='position:absolute;top:10px;left:10px;z-index:4;background:#000b;color:#0f8;font:12px monospace;padding:4px 8px;border-radius:8px;pointer-events:none';
+    fs.appendChild(el); }
+  el.textContent=txt;
+}
+function _fsWatchStats(v, pc){
+  if(v._statTimer) clearInterval(v._statTimer);
+  v._statTimer=setInterval(async()=>{
+    if(v._pc!==pc){ return; }
+    try{ const st=await pc.getStats(); let fps=null,w=0;
+      st.forEach(s=>{ if(s.type==='inbound-rtp'&&s.kind==='video'){ fps=s.framesPerSecond; w=s.frameWidth||w; } });
+      _fsBadge('WebRTC · '+(fps==null?'…':Math.round(fps))+'fps'+(w?' · '+w+'px':''));
+    }catch(e){}
+  },1000);
+}
+function _fsStatus(msg){
+  const fs=document.getElementById('fs'); if(!fs) return;
+  let el=document.getElementById('fs-status');
+  if(!el){ el=document.createElement('div'); el.id='fs-status';
+    el.style.cssText='position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:3;color:#fff;font-size:17px;background:#000a;pointer-events:none;text-align:center;padding:20px';
+    fs.appendChild(el); }
+  if(msg===null){ el.style.display='none'; } else { el.textContent=msg; el.style.display='flex'; }
+}
+// ONE WHEP attempt: returns the connected-pending pc on an accepted offer, throws otherwise. A 404
+// means the stream isn't published yet (the robot is still waking) — the caller retries.
+async function whepAttempt(node){
+  const r=ROBOTS.find(x=>x.node===node);
+  if(!r||!r.rtsp) throw new Error('no-rtsp-entry');
+  const u=new URL(r.rtsp.replace(/^rtsp:/,'http:'));
+  const port=8189+(parseInt(u.port||'8554',10)-8554);
+  const path=u.pathname.replace(/^\//,'');
+  const v=document.getElementById('fsvid');
+  const pc=new RTCPeerConnection({iceServers:[]});
+  pc.addTransceiver('video',{direction:'recvonly'});
+  pc.addTransceiver('audio',{direction:'recvonly'});
+  pc.ontrack=(e)=>{ if(e.streams&&e.streams[0]&&v.srcObject!==e.streams[0]){ v.srcObject=e.streams[0]; v.play().catch(()=>{});} };
+  const offer=await pc.createOffer(); await pc.setLocalDescription(offer);
+  await new Promise(res=>{ if(pc.iceGatheringState==='complete')return res();
+    const t=setTimeout(res,1200);
+    pc.addEventListener('icegatheringstatechange',()=>{ if(pc.iceGatheringState==='complete'){clearTimeout(t);res();} }); });
+  let resp;
+  try{ resp=await fetch(B+'/whepp/'+port+'/'+path,{method:'POST',
+        headers:{'Content-Type':'application/sdp'}, body:pc.localDescription.sdp}); }
+  catch(e){ try{pc.close();}catch(x){} throw new Error('fetch:'+e.message); }
+  if(!resp.ok){ try{pc.close();}catch(x){} throw new Error(resp.status===404?'no-publisher':('http'+resp.status)); }
+  await pc.setRemoteDescription({type:'answer',sdp:await resp.text()});
+  return pc;
+}
+function _waitConn(pc, ms){
+  return new Promise(res=>{
+    if(pc.connectionState==='connected') return res('connected');
+    const t=setTimeout(()=>res('timeout'), ms);
+    pc.addEventListener('connectionstatechange',()=>{
+      if(pc.connectionState==='connected'){clearTimeout(t);res('connected');}
+      else if(pc.connectionState==='failed'){clearTimeout(t);res('failed');} });
+  });
+}
+function hlsPlay(node){
+  const v=document.getElementById('fsvid'); const src=hlsSrc(node);
+  if(!src) return;
+  if(window.Hls && Hls.isSupported()){
+    const hls=new Hls({lowLatencyMode:true, backBufferLength:4});
+    hls.on(Hls.Events.ERROR,(e,d)=>{ if(d.fatal){ try{hls.destroy();}catch(x){} setTimeout(()=>{ if(document.getElementById('fs').style.display==='block') hlsPlay(node); },1500); }});
+    hls.loadSource(src); hls.attachMedia(v); v._hls=hls;
+    v.play().catch(()=>{});
+  } else if(v.canPlayType('application/vnd.apple.mpegurl')){
+    v.src=src; v.play().catch(()=>{});
+  }
+}
+// Play the fluid WebRTC. The stream appears only a few seconds AFTER camera/set on (the robot has to
+// wake and produce the first frame), so we RETRY the WHEP offer until the publisher is up instead of
+// giving up on the first 404 (that was the bug: it fell straight back to the ~5 s HLS). Only if the
+// offer is accepted but ICE genuinely can't connect do we fall back to HLS.
+async function fsPlay(node){
+  const v=document.getElementById('fsvid');
+  _cleanupVid(v);
+  const gen=(v._gen=(v._gen||0)+1);
+  const open=()=>document.getElementById('fs').style.display==='block' && v._gen===gen;
+  _fsStatus('Connessione al robot…');
+  const deadline=Date.now()+20000;   // keep trying while the robot wakes + first frame arrives
+  let iceFails=0;
+  while(open() && Date.now()<deadline){
+    let pc;
+    try{ pc=await whepAttempt(node); }
+    catch(e){ if(!open()) return; await new Promise(r=>setTimeout(r,900)); continue; }  // not ready → retry
+    if(!open()){ try{pc.close();}catch(e){} return; }
+    v._pc=pc;
+    const st=await _waitConn(pc, 6000);
+    if(!open()){ try{pc.close();}catch(e){} return; }
+    if(st==='connected'){
+      _fsStatus(null);                 // FLUID WebRTC is playing
+      _fsWatchStats(v, pc);            // badge: WebRTC · Nfps
+      pc.addEventListener('connectionstatechange',()=>{   // self-heal if the stream drops
+        if((pc.connectionState==='failed'||pc.connectionState==='disconnected') && open() && v._pc===pc){
+          bg(node,'camera/set','on'); setTimeout(()=>{ if(open()&&v._pc===pc) fsPlay(node); },800);
+        } });
+      return;
+    }
+    try{pc.close();}catch(e){} v._pc=null;
+    if(++iceFails>=2) break;          // answer OK but ICE won't connect → network issue → HLS
+    await new Promise(r=>setTimeout(r,600));
+  }
+  if(open()){ _fsStatus(null); _fsBadge('HLS (ripiego)'); console.log('[ebo] WHEP unavailable → HLS fallback'); hlsPlay(node); }
+}
+let _driveVQ=null;   // video quality saved on entering drive, restored on exit
 function enterFS(node){
   document.getElementById('fs-pad').innerHTML=dpad(node);
   document.getElementById('fs-act').innerHTML=fsActions(node);
-  const v=document.getElementById('fsvid'); v.setAttribute('data-node',node);
+  const v=document.getElementById('fsvid');
+  v.setAttribute('data-node',node);                 // keyboard driving reads the node from here
   document.getElementById('fs-sp').value=driveSpeed;
   const fs=document.getElementById('fs'); fs.classList.remove('hidectl'); fs.style.display='block';
-  if(fs.requestFullscreen) fs.requestFullscreen().catch(()=>{});
-  if(fsTimer) clearInterval(fsTimer);
-  fsTimer=setInterval(()=>{ const im=new Image(); im.onload=()=>{v.src=im.src};
-    im.src=B+'/api/snapshot?node='+encodeURIComponent(node)+'&t='+Date.now(); },300);
+  fs.focus();                                       // keyboard focus so the arrow keys reach us
+  bg(node,'camera/set','on');                       // join RTC + feed = wake (like opening the app)
+  // FLUID DRIVING: force a low resolution while driving. The robot's High mode is 2304×1296 (3 MP),
+  // which our real-time H.265→H.264 re-encode can't keep up with — frames pile up and the video lags
+  // by SECONDS. At Low (848×480) the encoder keeps up → smooth ~20 fps at ~200 ms. We save the
+  // previous quality and restore it on exit (so still-viewing keeps your chosen quality).
+  const r=ROBOTS.find(x=>x.node===node);
+  _driveVQ=(r&&r.state&&r.state.video_quality)||null;
+  if(_driveVQ && _driveVQ!=='Low') bg(node,'video_quality/set','Low');
+  setTimeout(()=>fsPlay(node),400);                 // give the camera a moment, then play
+  if(fs.requestFullscreen) fs.requestFullscreen().then(()=>fs.focus()).catch(()=>{});
+  if(wakeTimer) clearInterval(wakeTimer);
+  // keep-alive while driving: re-assert the camera/RTC session so the robot can't drift to standby
+  wakeTimer=setInterval(()=>bg(node,'camera/set','on'),20000);
 }
 function toggleFsControls(){ document.getElementById('fs').classList.toggle('hidectl'); }
 function exitFS(){
   stopMove(); if(fsTimer){clearInterval(fsTimer);fsTimer=null;}
+  if(wakeTimer){clearInterval(wakeTimer);wakeTimer=null;}
+  const v=document.getElementById('fsvid');
+  const node=v.getAttribute('data-node');
+  if(_driveVQ && _driveVQ!=='Low' && node) bg(node,'video_quality/set',_driveVQ);   // restore quality
+  _driveVQ=null;
+  _cleanupVid(v);                                      // stop WebRTC + HLS
   document.getElementById('fs').style.display='none';
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
 }
-// keyboard driving in fullscreen: arrow keys (or WASD) hold-to-move, Esc exits
+// keyboard driving in fullscreen: arrow keys (or WASD) hold-to-move, Esc exits. Multiple keys held
+// at once combine (e.g. Up+Right = forward-right diagonal) — each key adds/removes its own direction.
 const KEYDIR={ArrowUp:'fwd',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right',w:'fwd',s:'back',a:'left',d:'right'};
-let keyDir=null;
 document.addEventListener('keydown',e=>{
   const open=document.getElementById('fs').style.display==='block';
   if(e.key==='Escape'&&open){ exitFS(); return; }
   if(!open) return;
   const dir=KEYDIR[e.key]; if(!dir) return;
   e.preventDefault();
-  if(keyDir===dir) return;                       // ignore auto-repeat
-  keyDir=dir; startMove(document.getElementById('fsvid').getAttribute('data-node'),dir);
+  startMove(document.getElementById('fsvid').getAttribute('data-node'),dir);   // auto-repeat ignored inside
 });
 document.addEventListener('keyup',e=>{
-  if(KEYDIR[e.key] && keyDir){ e.preventDefault(); keyDir=null; stopMove(); }
+  const dir=KEYDIR[e.key]; if(dir){ e.preventDefault(); stopMove(dir); }
 });
 
 function listView(){
@@ -667,8 +917,8 @@ function detailView(r){
     <div id="d-meta" class="dmeta">${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · 🔋 ${st.battery??'—'}% · 📶 ${st.wifi??'—'}</div>
     <div class="row">
       <button id="d-cam" class="btn ${cam?'pri':''}" onclick="cmd('${r.node}','camera/set','${cam?'off':'on'}')">${cam?'Camera ON':'Camera OFF'}</button>
-      <button class="btn" onclick="cmd('${r.node}','wake','')">☀ Wake</button>
-      <button class="btn" onclick="cmd('${r.node}','sleep/set','on')">🌙 Standby</button>
+      <button class="btn" onclick="cmd('${r.node}','camera/set','on')">☀ Wake</button>
+      <button class="btn" onclick="cmd('${r.node}','connected/set','off')">🌙 Standby</button>
       <button class="btn" onclick="cmd('${r.node}','laser/set','on')">Laser</button>
       <button class="btn" onclick="cmd('${r.node}','dock','')">Dock</button>
     </div>
@@ -802,7 +1052,7 @@ function previewLoop(){
 }
 fetch(B+'/api/account').then(r=>r.json()).then(a=>{ if(a.email) document.getElementById('acct').textContent=' · '+a.email; }).catch(()=>{});
 refresh(); setInterval(refresh, 4000);
-previewLoop(); setInterval(previewLoop, 900);
+previewLoop(); setInterval(previewLoop, 300);
 </script></body></html>"""
 
 

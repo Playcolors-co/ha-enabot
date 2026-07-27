@@ -1,47 +1,58 @@
-# EBO drive card — camera with a D-pad overlaid, for ANY Home Assistant user (non-admin too).
+# EBO drive card — LIVE camera (WebRTC, fluid) with a D-pad overlaid. Works for ANY HA user.
 #
-# Non-admin users can't see the add-on panel (admin-only), but they CAN use dashboards. Put this
-# card on a dashboard/view and give the user access to it — they get live video + driving.
+# WHY THIS IS FLUID: `camera_view: live` makes Home Assistant serve the stream through its built-in
+# go2rtc as WebRTC (~200 ms) — far smoother than the add-on panel's HLS. The robot streams H.265,
+# which browsers can't decode directly, so the add-on already re-encodes to H.264; this card plays
+# that H.264 over WebRTC. This is the smoothest path to actually drive the robot.
 #
 # HOW TO USE
-# 1. Settings → Dashboards → (your dashboard) → Edit → ⋮ → "Edit in YAML" (or add a card → Manual).
-# 2. Paste the card below. Replace the entity ids to match YOUR robot: if your robot's device is
-#    named "Salotto", the entities are camera.salotto, button.salotto_forward, etc. (For a device
-#    named "EBO" they're camera.ebo / button.ebo_forward … as written here.)
-# 3. To let a specific (non-admin) user drive: put this card on a view and restrict that view's
-#    visibility to that user (view settings → Visibility). Non-admins never reach Settings/pairing.
+# 1. Settings → Dashboards → (your dashboard) → Edit → "+ Add card" → "Manual" (or ⋮ → Edit in YAML).
+# 2. Paste the card below. Entity ids match a robot whose device is named "EBO" (camera.ebo,
+#    button.ebo_forward …). If your robot has another name, adjust the ids accordingly.
+# 3. To let a NON-admin user drive: put this card on a view and restrict that view's visibility to
+#    that user (view settings → Visibility). Non-admins never reach Settings/pairing.
 #
-# Each button drives for ~1s then the robot stops itself (watchdog). For smooth hold-to-drive,
-# use the custom joystick card (lovelace/ebo-joystick-card.js) instead.
+# WAKE: tap the ⏻ power icon (top-left) to turn the camera ON — that JOINS the robot's cloud session,
+# which WAKES it (exactly like opening the app) and starts the live video. Tap again for standby (ZZ).
+# Each arrow drives ~1 s then the robot stops itself (watchdog).
 
 type: picture-elements
 camera_image: camera.ebo
+camera_view: live          # <-- LIVE = WebRTC via HA go2rtc (fluid). Without this it's just stills.
 elements:
+  # ⏻ power = camera ON/OFF. ON joins the RTC session → wakes the robot + starts live video.
+  - type: icon
+    icon: mdi:power
+    entity: switch.ebo_camera
+    style: {top: 10%, left: 8%, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: switch.toggle, target: {entity_id: switch.ebo_camera}}
+  # Return to base (dock)
+  - type: icon
+    icon: mdi:home-import-outline
+    style: {top: 10%, left: 92%, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_return_to_base}}
+  # Forward
   - type: icon
     icon: mdi:arrow-up-bold
     style: {top: 62%, left: 50%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
     tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_forward}}
+  # Back
   - type: icon
     icon: mdi:arrow-down-bold
     style: {top: 90%, left: 50%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
     tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_back}}
+  # Turn left
   - type: icon
     icon: mdi:arrow-left-bold
     style: {top: 76%, left: 38%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
-    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_left}}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_turn_left}}
+  # Turn right
   - type: icon
     icon: mdi:arrow-right-bold
     style: {top: 76%, left: 62%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
-    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_right}}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_turn_right}}
+  # Stop
   - type: icon
     icon: mdi:stop
     style: {top: 76%, left: 50%, "--mdc-icon-size": 36px, color: white, background: "#c0392bcc", border-radius: 10px, padding: 6px}
     tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_stop}}
-  - type: icon
-    icon: mdi:weather-sunny
-    style: {top: 10%, left: 8%, color: white, background: "#0007", border-radius: 10px, padding: 6px}
-    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_wake}}
-  - type: icon
-    icon: mdi:home-import-outline
-    style: {top: 10%, left: 92%, color: white, background: "#0007", border-radius: 10px, padding: 6px}
-    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_dock}}

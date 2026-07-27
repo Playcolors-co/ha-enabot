@@ -135,6 +135,18 @@ else
   echo "[add-on] could not detect host IP — set 'host_ip' in the add-on config for the camera URL"
 fi
 
+# ALL the host's LAN IPv4s (comma-separated): mediamtx advertises these as WebRTC ICE candidates so
+# the browser (which may reach HA on a different NIC/VLAN than the robot's) can connect to the
+# panel's fluid WebRTC drive video. We don't know in advance which IP the browser uses, so we offer
+# them all and ICE picks the reachable one.
+EBO_HOST_IPS="$(pget host_ip "")"
+if [ -n "${NET_JSON:-}" ]; then
+  EBO_HOST_IPS="$(echo "$NET_JSON" | jq -r '[.data.interfaces[]? | select(.enabled==true) | .ipv4.address[]?] | join(",")' 2>/dev/null | sed 's#/[0-9]*##g')"
+fi
+[ -z "$EBO_HOST_IPS" ] && EBO_HOST_IPS="$EBO_HOST_IP"
+export EBO_HOST_IPS
+echo "[add-on] host IPs advertised for WebRTC ICE: ${EBO_HOST_IPS:-<none>}"
+
 # Log the version actually running (baked into the image) vs what the Supervisor thinks is
 # installed. If they differ, the image wasn't rebuilt on update (stale) — that's the real bug.
 CODE_VER="$(cat /app/VERSION.txt 2>/dev/null || echo '?')"
