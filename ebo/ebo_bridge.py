@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import queue
 import threading
 import time
 
@@ -142,6 +143,10 @@ class Bridge:
         self.vec = {"lx": 0, "ly": 0, "rx": 0, "ry": 0, "buttons": 0}
         self.vec_deadline = 0.0
         self.lock = threading.Lock()
+        # ALL RTM sends go through one sender thread (see _sender_loop): callers only enqueue.
+        # The Agora SDK is not thread-safe, and — crucially — a slow cloud send must never run on
+        # the MQTT receive thread, or it blocks delivery of every following command.
+        self._send_q = queue.Queue(maxsize=256)
         self.stop = threading.Event()
 
         self.rtm = None
@@ -768,6 +773,8 @@ class Bridge:
         )
 
     def send(self, mid, data=None):
+        """Build the message and ENQUEUE it — never touches the SDK directly, so a slow cloud send
+        can't block the caller (MQTT receive thread, control loop…). _sender_loop does the publish."""
         if not (self.connected and self.rtm):   # the "connected" switch is off
             return
         msg = {"id": mid, "type": 0, "timestamp": time.time() * 1000}
@@ -776,21 +783,35 @@ class Bridge:
         if data is not None:
             msg["data"] = data
         payload = json.dumps(msg, separators=(",", ":")).encode()
-        t0 = time.perf_counter()
         try:
-            r, _ = self.rtm.publish(self.s["robot_rtm"], payload, self._opts())
-        except Exception as e:
-            log("[!] publish %s error: %s" % (mid, e))
-            return
-        # The LOCAL cost of dispatching a command (what MQTT-vs-native would change) — normally a
-        # few ms. The rest of the perceived lag is the Agora CLOUD round-trip, which no transport
-        # choice can remove. Only log when the local part is unexpectedly slow, to keep it honest.
-        dt = (time.perf_counter() - t0) * 1000.0
-        if dt > 25:
-            log("[timing] local RTM dispatch of cmd %s took %.0f ms "
-                "(cloud round-trip is separate)" % (mid, dt))
-        if r != 0:
-            log("[!] publish %s failed: %s" % (mid, self.rtm.get_error_reason(r)))
+            self._send_q.put_nowait((mid, payload))
+        except queue.Full:
+            pass   # under backpressure drop the stale command (the move watchdog keeps it safe)
+
+    def _sender_loop(self):
+        """The ONLY thread that calls rtm.publish(): serializes every send (the SDK is not
+        thread-safe) and keeps slow cloud sends off the receive/control threads, so one slow send
+        never stalls command delivery."""
+        while not self.stop.is_set():
+            try:
+                mid, payload = self._send_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            rtm = self.rtm
+            if not rtm:
+                continue
+            t0 = time.perf_counter()
+            try:
+                r, _ = rtm.publish(self.s["robot_rtm"], payload, self._opts())
+            except Exception as e:
+                log("[!] publish %s error: %s" % (mid, e))
+                continue
+            dt = (time.perf_counter() - t0) * 1000.0
+            if dt > 2000:   # only when genuinely slow (cloud degrading) — not normal jitter
+                log("[timing] ⚠ slow RTM dispatch of cmd %s: %.0f ms — the cloud link is degrading"
+                    % (mid, dt))
+            if r != 0:
+                log("[!] publish %s failed: %s" % (mid, rtm.get_error_reason(r)))
 
     def _on_rtm(self, event):
         try:
@@ -998,10 +1019,21 @@ class Bridge:
 
     def _publish_discovery(self, c):
         c.publish("%s/status" % NODE, "online", retain=True)
+        # ALWAYS subscribe to the command topics FIRST — the bridge must receive commands even in
+        # native mode (expose_mqtt off), where the HA-entity discovery below is skipped. (These used
+        # to sit AFTER the expose_mqtt gate, so native mode silently stopped receiving commands.)
+        for _t in ("laser/set", "speed/set", "move/+", "move/vector", "joystick", "sleep/set",
+                   "wake", "say", "talk", "audio_tx/set", "volume/set", "talkback_volume/set",
+                   "sports_record/set", "call_rec/set", "upload_cloud/set", "dock",
+                   "patrol/route/set", "patrol/start", "camera/set", "connected/set",
+                   "rotate/set", "video_quality/set", "image_style/set", "shoot_mode/set",
+                   "move_mode/set", "eyes/set", "roaming/set", "ai_track", "motion/set",
+                   "voice/set", "ai_ask"):
+            c.subscribe("%s/%s" % (NODE, _t))
         if not self.expose_mqtt:
             # native-integration mode: skip MQTT entity discovery (the panel/integration still
-            # get state via <node>/state and commands via the topics). Status stays for the panel.
-            log("[MQTT] expose_mqtt=off — not publishing HA entity discovery")
+            # get state via <node>/state and commands via the topics subscribed above).
+            log("[MQTT] expose_mqtt=off — subscribed to commands; skipping HA entity discovery")
             return
         st = "%s/state" % NODE
 
@@ -1510,6 +1542,7 @@ class Bridge:
         self._install_signals()
         self.connect_mqtt()       # MQTT first so telemetry has somewhere to go
         self.connect_agora()
+        threading.Thread(target=self._sender_loop, daemon=True).start()   # single RTM sender
         threading.Thread(target=self.control_loop, daemon=True).start()
         self.send(OP_HANDSHAKE, {"userId": self.account})
         time.sleep(1)

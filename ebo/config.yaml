@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.26.4"
+version: "0.26.9"
 slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
@@ -49,11 +49,14 @@ options:
   password: ""
   payload_key: ""
   sign_key: ""
+  log_level: info
 schema:
   email: str
   password: password
   payload_key: password
   sign_key: password
+  # add-on log verbosity: info (default) | debug (chatty) | warning (only problems)
+  log_level: list(debug|info|warning)?
   # token the companion integration uses to read this add-on's data API. Auto-generated if empty;
   # persisted here so the integration can read it via the Supervisor. You don't need to set it.
   api_token: str?

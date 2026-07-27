@@ -43,7 +43,10 @@ export EBO_VIDEO="$(pbool video true)"
 export EBO_AUDIO="$(pbool audio true)"
 export EBO_TALK="$(pbool talk false)"
 export EBO_AUDIO_PT="$(pget audio_codec 8)"
-export EBO_LOG_LEVEL="$(pget log_level info)"
+# log level: the Configuration-tab option wins; fall back to the panel setting, then 'info'.
+EBO_LOG_LEVEL="$(jq -r '.log_level // empty' "$OPTS" 2>/dev/null)"
+[ -z "$EBO_LOG_LEVEL" ] && EBO_LOG_LEVEL="$(pget log_level info)"
+export EBO_LOG_LEVEL
 export EBO_VIDEO_MAX_HEIGHT="$(pget video_max_height 720)"
 export EBO_VIDEO_FPS="$(pget video_fps 20)"
 export EBO_VIDEO_BITRATE="$(pget video_bitrate 2500)"

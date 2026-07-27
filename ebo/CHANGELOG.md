@@ -1,5 +1,47 @@
 # Changelog — Enabot integration
 
+## 0.26.9 — CRITICAL FIX: no commands worked in native mode (missing subscriptions)
+- The bridge's **command topic subscriptions** were located AFTER the `expose_mqtt` gate inside the
+  discovery method. Since native mode (the default since 0.26.0) sets `expose_mqtt: off`, that method
+  returned early — so the bridge **never subscribed to the command topics** and ignored every command
+  (wake / laser / move / camera / everything), though telemetry still flowed. Subscriptions now run
+  **unconditionally on connect**, before the discovery gate. This is the real cause of "nothing works".
+
+
+## 0.26.8 — FIX: commands stop reaching the robot (blocking sends on the receive thread)
+- Root cause of "nothing responds after a while": `rtm.publish()` ran **synchronously on the MQTT
+  receive thread**. When a cloud send got slow, it blocked that thread, so no further command was
+  ever delivered to the robot — it looked totally dead until an add-on restart. Now **all sends go
+  through a single dedicated sender thread via a queue**; the receive/control loops only enqueue and
+  never block, and the SDK is never called concurrently. (Replaces the 0.26.7 lock, which serialized
+  but still blocked the receive thread.)
+
+
+## 0.26.7 — FIX: commands stop working after a while (RTM thread-safety)
+- The Agora RTM `publish()` was called from several threads (heartbeat loop, movement loop, command
+  handler) **without a lock**. The SDK is not thread-safe, so concurrent sends corrupted the
+  connection — dispatch latency crept to **several seconds** and the robot dropped the control
+  session (laser/move/etc. stopped responding, needing an add-on restart). All RTM sends are now
+  **serialized through a lock**, keeping the link healthy.
+
+
+## 0.26.6 — keyboard driving, quieter logs, log level in Configuration
+- **Fullscreen keyboard driving:** arrow keys (or WASD) drive the robot while in the fullscreen
+  gamepad — hold to move, release to stop.
+- **Quieter logs:** the per-command timing line now only appears when the cloud link is genuinely
+  slow (>2s), instead of every couple of seconds — so a healthy add-on log is calm.
+- **Log level** is back in the add-on **Configuration** tab (`log_level`: info/debug/warning).
+
+
+## 0.26.5 — panel driving UX: wake-on-open, feedback, fullscreen toggles, charging notice
+- **Wake on open, standby on leave:** opening a robot in the panel wakes it; going back puts it in
+  standby. (A robot **on the charger won't drive** — the detail page now shows a clear notice.)
+- **Button press feedback:** D-pad and overlay buttons now visibly react when pressed.
+- **Fullscreen:** tap the video to **show/hide the controls**; open fullscreen by **tapping the
+  camera** in the detail page; smoother live refresh while driving.
+- **Robot list:** each robot has **🎮 drive** (straight to fullscreen gamepad) and **⚙ open** icons.
+
+
 ## 0.26.4 — driving available to any user (dashboard), not just the admin panel
 - The integration now exposes **movement buttons** (Forward / Back / Turn left / Turn right / Stop)
   per robot, so the robot can be driven from a **Home Assistant dashboard by non-admin users** — the

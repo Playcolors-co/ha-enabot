@@ -63,8 +63,7 @@ EDITABLE_OPTS = {
                      "choices": ["ultrafast", "superfast", "veryfast", "faster", "fast"],
                      "default": "ultrafast", "label": "Video encoder preset"},
     "audio_codec": {"type": "select", "choices": [8, 9], "default": 8, "label": "Audio codec"},
-    "log_level": {"type": "select", "choices": ["debug", "info", "warning"], "default": "info",
-                  "label": "Log level"},
+    # log_level lives in the add-on Configuration tab now (not here).
     "region": {"type": "text", "default": "GB", "label": "Account region"},
     "host": {"type": "text", "default": "ebox-eu.enabotserverintl.com",
              "label": "Account server host"},
@@ -492,6 +491,19 @@ input[type=range]{width:100%}
 .fs-act{position:absolute;right:22px;bottom:22px;z-index:2;display:flex;flex-direction:column;gap:10px;opacity:.92}
 .fs-act .btn{background:#ffffff26;color:#fff;backdrop-filter:blur(3px);min-width:120px}
 .fs-sp{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);z-index:2;width:200px;opacity:.9}
+#fs.hidectl .fs-pad,#fs.hidectl .fs-act,#fs.hidectl .fs-sp{display:none}
+/* press feedback (so you SEE the button react) */
+.btn:active{transform:scale(.96);filter:brightness(1.3)}
+.db.on,.db:active{background:#2b6cff !important;color:#fff !important;transform:scale(.9)}
+.fs-pad .db.on,.fs-pad .db:active{background:#2b6cffcc !important}
+.fs-act .btn:active{background:#2b6cffcc !important}
+/* list action icons + detail camera hint + charging warning */
+.ic{border:0;background:transparent;font-size:20px;cursor:pointer;padding:6px 8px;border-radius:9px;line-height:1;flex:none}
+.ic:hover{background:#0001}
+@media(prefers-color-scheme:dark){.ic:hover{background:#ffffff14}}
+.bigwrap{position:relative;cursor:pointer}
+.fshint{position:absolute;right:10px;bottom:20px;background:#0008;color:#fff;font-size:11px;padding:3px 8px;border-radius:8px;pointer-events:none}
+.warn{background:#e67e22;color:#fff;border-radius:10px;padding:9px 12px;font-size:13px;margin:10px 0;font-weight:600}
 dialog{border:0;border-radius:14px;padding:0;max-width:440px;width:92%;background:#fff;color:#111}
 @media(prefers-color-scheme:dark){dialog{background:#1c2126;color:#e9ecef}}
 dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;margin-top:10px}
@@ -505,7 +517,7 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
 <div id="view"></div>
 
 <div id="fs">
-  <img id="fsvid" class="prev" data-node="">
+  <img id="fsvid" class="prev" data-node="" onclick="toggleFsControls()">
   <button class="fsx" onclick="exitFS()">✕</button>
   <div class="fs-pad" id="fs-pad"></div>
   <input class="fs-sp" id="fs-sp" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value">
@@ -559,8 +571,10 @@ function meta(r){const st=r.state||{};
   const bat=(st.battery!=null)?st.battery+'%':'—', wifi=(st.wifi!=null?st.wifi:(st.rssi!=null?st.rssi:'—'));
   return `${r.model||'EBO'} · 🔋 ${bat} · 📶 ${wifi}`;}
 function thumb(n){return `${B}/api/snapshot?node=${encodeURIComponent(n)}&t=${Math.floor(Date.now()/4000)}`}
-function openRobot(n){SEL=n; render(true)}
-function goBack(){SEL=null; render(true)}
+function bg(node,suffix,payload){ fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node,suffix,payload})}).catch(()=>{}); }
+function openRobot(n){ SEL=n; render(true); bg(n,'wake',''); }          // wake on enter
+function goBack(){ const p=SEL; SEL=null; render(true); if(p) bg(p,'sleep/set','on'); }  // standby on exit
+function driveNow(n){ SEL=n; render(true); bg(n,'wake',''); setTimeout(()=>enterFS(n),60); }
 
 // --- driving: hold a D-pad button to move, release to stop (analog vector + watchdog) ---
 let driveSpeed=60, moveNode=null, moveTimer=null;
@@ -579,11 +593,11 @@ function stopMove(){
   if(moveNode){sendVec(moveNode,0,0,0); moveNode=null;}
 }
 function dpad(node){
-  const h=d=>`onpointerdown="event.preventDefault();startMove('${node}','${d}')" onpointerup="stopMove()" onpointerleave="stopMove()" onpointercancel="stopMove()"`;
+  const h=d=>`onpointerdown="event.preventDefault();this.classList.add('on');startMove('${node}','${d}')" onpointerup="this.classList.remove('on');stopMove()" onpointerleave="this.classList.remove('on');stopMove()" onpointercancel="this.classList.remove('on');stopMove()"`;
   return `<div class="dpad">
     <button class="db up" ${h('fwd')}>▲</button>
     <button class="db left" ${h('left')}>◀</button>
-    <button class="db stop" onclick="stopMove()">■</button>
+    <button class="db stop" onpointerdown="this.classList.add('on')" onpointerup="this.classList.remove('on')" onpointerleave="this.classList.remove('on')" onclick="stopMove()">■</button>
     <button class="db right" ${h('right')}>▶</button>
     <button class="db down" ${h('back')}>▼</button>
   </div>`;
@@ -599,34 +613,56 @@ function enterFS(node){
   document.getElementById('fs-act').innerHTML=fsActions(node);
   const v=document.getElementById('fsvid'); v.setAttribute('data-node',node);
   document.getElementById('fs-sp').value=driveSpeed;
-  document.getElementById('fs').style.display='block';
-  const fs=document.getElementById('fs'); if(fs.requestFullscreen) fs.requestFullscreen().catch(()=>{});
+  const fs=document.getElementById('fs'); fs.classList.remove('hidectl'); fs.style.display='block';
+  if(fs.requestFullscreen) fs.requestFullscreen().catch(()=>{});
   if(fsTimer) clearInterval(fsTimer);
   fsTimer=setInterval(()=>{ const im=new Image(); im.onload=()=>{v.src=im.src};
-    im.src=B+'/api/snapshot?node='+encodeURIComponent(node)+'&t='+Date.now(); },450);
+    im.src=B+'/api/snapshot?node='+encodeURIComponent(node)+'&t='+Date.now(); },300);
 }
+function toggleFsControls(){ document.getElementById('fs').classList.toggle('hidectl'); }
 function exitFS(){
   stopMove(); if(fsTimer){clearInterval(fsTimer);fsTimer=null;}
   document.getElementById('fs').style.display='none';
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
 }
-document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&document.getElementById('fs').style.display==='block') exitFS(); });
+// keyboard driving in fullscreen: arrow keys (or WASD) hold-to-move, Esc exits
+const KEYDIR={ArrowUp:'fwd',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right',w:'fwd',s:'back',a:'left',d:'right'};
+let keyDir=null;
+document.addEventListener('keydown',e=>{
+  const open=document.getElementById('fs').style.display==='block';
+  if(e.key==='Escape'&&open){ exitFS(); return; }
+  if(!open) return;
+  const dir=KEYDIR[e.key]; if(!dir) return;
+  e.preventDefault();
+  if(keyDir===dir) return;                       // ignore auto-repeat
+  keyDir=dir; startMove(document.getElementById('fsvid').getAttribute('data-node'),dir);
+});
+document.addEventListener('keyup',e=>{
+  if(KEYDIR[e.key] && keyDir){ e.preventDefault(); keyDir=null; stopMove(); }
+});
 
 function listView(){
   if(!ROBOTS.length) return `<div class="empty">Waiting for robots… make sure the add-on is running.</div>`;
   return `<div class="list">`+ROBOTS.map(r=>`
     <div class="rowitem" onclick="openRobot('${r.node}')">
       <img class="thumb prev" data-node="${r.node}" src="${B}/api/snapshot?node=${encodeURIComponent(r.node)}&t=${Date.now()}" onerror="this.style.opacity=.25">
-      <div>
+      <div style="flex:1">
         <div class="ri-name"><span id="dot-${r.node}" class="dot ${r.online?'on':''}"></span>${esc(r.name||r.node)}</div>
         <div id="meta-${r.node}" class="ri-meta">${meta(r)}</div>
-      </div><div class="chev">›</div>
+      </div>
+      <button class="ic" title="Drive (fullscreen)" onclick="event.stopPropagation();driveNow('${r.node}')">🎮</button>
+      <button class="ic" title="Open / settings" onclick="event.stopPropagation();openRobot('${r.node}')">⚙</button>
     </div>`).join('')+`</div>`;
 }
 function detailView(r){
   const st=r.state||{}, cam=(r.camera==='on');
+  const charging = (st.charging===true || st.charging==='true');
   return `<div class="detail">
-    <img class="big prev" data-node="${r.node}" src="${B}/api/snapshot?node=${encodeURIComponent(r.node)}&t=${Date.now()}" onerror="this.style.opacity=.25">
+    <div class="bigwrap" onclick="enterFS('${r.node}')" title="Tap for fullscreen">
+      <img class="big prev" data-node="${r.node}" src="${B}/api/snapshot?node=${encodeURIComponent(r.node)}&t=${Date.now()}" onerror="this.style.opacity=.25">
+      <span class="fshint">⛶ tap for fullscreen</span>
+    </div>
+    ${charging? '<div class="warn">🔌 On the charger — take the robot off the base to drive it.</div>':''}
     <div class="dname"><span id="d-dot" class="dot ${r.online?'on':''}"></span>${esc(r.name||r.node)}</div>
     <div id="d-meta" class="dmeta">${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · 🔋 ${st.battery??'—'}% · 📶 ${st.wifi??'—'}</div>
     <div class="row">
