@@ -1,4 +1,9 @@
-"""Buttons: return to base (dock), laser."""
+"""Buttons: wake, standby, dock, laser, and driving (forward/back/left/right/stop).
+
+The driving buttons make the robot controllable from any Home Assistant dashboard — i.e. by
+non-admin users too (the add-on panel is admin-only). Each press sends a short, watchdog-limited
+move (the robot stops on its own after ~1s), so a plain button is safe to expose.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .entity import EboEntity
 
+_HOLD = 1.1          # seconds each press drives before the watchdog stops the robot
+_SPEED = 60          # ±100 scale
+
+
+def _vec(ly=0, rx=0):
+    return '{"ly":%d,"rx":%d,"hold":%.1f}' % (ly, rx, _HOLD)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             add: AddEntitiesCallback) -> None:
@@ -19,6 +31,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
         EboButton(c, entry, "standby", "Standby", "sleep/set", "on", "mdi:sleep"),
         EboButton(c, entry, "dock", "Return to base", "dock", "", "mdi:home-import-outline"),
         EboButton(c, entry, "laser", "Laser", "laser/set", "on", "mdi:laser-pointer"),
+        # driving — usable on any dashboard (non-admin friendly)
+        EboButton(c, entry, "forward", "Forward", "move/vector", _vec(ly=-_SPEED), "mdi:arrow-up-bold"),
+        EboButton(c, entry, "back", "Back", "move/vector", _vec(ly=_SPEED), "mdi:arrow-down-bold"),
+        EboButton(c, entry, "left", "Turn left", "move/vector", _vec(rx=-_SPEED), "mdi:arrow-left-bold"),
+        EboButton(c, entry, "right", "Turn right", "move/vector", _vec(rx=_SPEED), "mdi:arrow-right-bold"),
+        EboButton(c, entry, "stop", "Stop", "move/vector", _vec(), "mdi:stop"),
     ])
 
 

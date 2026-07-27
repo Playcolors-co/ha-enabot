@@ -331,8 +331,11 @@ class Bridge:
             if self.video_on:            # restore camera state across reconnects
                 self._camera_feed(True)
 
-    def _rtsp_url(self):
-        host = self.host_ip or "<HOME-ASSISTANT-IP>"
+    def _rtsp_url(self, host=None):
+        # host=None -> LAN host IP (for the human-facing 'EBO camera URL' / Generic Camera).
+        # For the native integration we pass the add-on's internal hostname, reachable by HA core
+        # over the Supervisor network regardless of LAN/VLAN firewalls (same as the data API).
+        host = host or self.host_ip or "<HOME-ASSISTANT-IP>"
         return "rtsp://%s:%d/%s" % (host, self.rtsp_port, self.rtsp_path)
 
     def _setup_video_pipeline(self):
@@ -935,7 +938,7 @@ class Bridge:
             "sn": self.info.get("sn", ""),
             "mac": self.info.get("mac", ""),
             "model": self.info.get("model", "EBO Air 2"),
-            "rtsp": self._rtsp_url(),
+            "rtsp": self._rtsp_url(host_ip),   # internal hostname -> reachable by HA core
             "robot_id": self.robot_id,        # cloud robot id (for remove-from-account)
             # for the native HA integration: its data/command API + token
             "api": ("http://%s:%s" % (host_ip, api_port)) if host_ip else "",

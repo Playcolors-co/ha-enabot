@@ -404,7 +404,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, json.dumps({"error": "bad body"}))
         if path.endswith("/api/cmd"):
             node, suffix = str(body.get("node", "")), str(body.get("suffix", ""))
-            if not node or suffix not in ALLOWED_CMDS or _client is None:
+            # movement (move/vector, move/forward…) is allowed from the panel: you drive it while
+            # watching the live view, so the "can't see the robot" reason to block it doesn't apply.
+            ok_cmd = suffix in ALLOWED_CMDS or suffix.startswith("move/")
+            if not node or not ok_cmd or _client is None:
                 return self._send(400, json.dumps({"error": "bad command"}))
             _client.publish("%s/%s" % (node, suffix), str(body.get("payload", "")))
             log("[panel] cmd %s/%s = %s" % (node, suffix, body.get("payload", "")))
@@ -471,6 +474,24 @@ label{font-size:12px;color:#8a929a;display:block;margin:10px 0 3px}
 select,input[type=number]{width:100%;padding:8px;border-radius:8px;border:1px solid #0002;background:transparent;color:inherit}
 input[type=range]{width:100%}
 .url{font-size:11px;color:#8a929a;word-break:break-all;margin-top:10px}
+/* driving D-pad */
+.drive{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.dpad{display:grid;grid-template-columns:repeat(3,58px);grid-template-rows:repeat(3,58px);gap:6px;flex:none}
+.db{border:0;border-radius:13px;background:#e6e8eb;color:inherit;font-size:20px;font-weight:700;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;display:flex;align-items:center;justify-content:center}
+@media(prefers-color-scheme:dark){.db{background:#2a3138;color:#e9ecef}}
+.db:active{background:#2b6cff;color:#fff}
+.db.up{grid-area:1/2}.db.left{grid-area:2/1}.db.stop{grid-area:2/2;background:#c0392b;color:#fff}.db.right{grid-area:2/3}.db.down{grid-area:3/2}
+.drive .sp{flex:1;min-width:150px}
+/* fullscreen gamepad */
+#fs{position:fixed;inset:0;background:#000;z-index:9999;display:none}
+#fsvid{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.fsx{position:absolute;top:12px;right:14px;z-index:2;background:#000a;color:#fff;border:0;border-radius:50%;width:42px;height:42px;font-size:18px;cursor:pointer}
+.fs-pad{position:absolute;left:22px;bottom:22px;z-index:2;opacity:.92}
+.fs-pad .dpad{grid-template-columns:repeat(3,68px);grid-template-rows:repeat(3,68px)}
+.fs-pad .db{background:#ffffff26;color:#fff;backdrop-filter:blur(3px)}
+.fs-act{position:absolute;right:22px;bottom:22px;z-index:2;display:flex;flex-direction:column;gap:10px;opacity:.92}
+.fs-act .btn{background:#ffffff26;color:#fff;backdrop-filter:blur(3px);min-width:120px}
+.fs-sp{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);z-index:2;width:200px;opacity:.9}
 dialog{border:0;border-radius:14px;padding:0;max-width:440px;width:92%;background:#fff;color:#111}
 @media(prefers-color-scheme:dark){dialog{background:#1c2126;color:#e9ecef}}
 dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;margin-top:10px}
@@ -482,6 +503,14 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
         <button class="btn" onclick="openOpts()">⚙ Settings</button></span>
 </header>
 <div id="view"></div>
+
+<div id="fs">
+  <img id="fsvid" class="prev" data-node="">
+  <button class="fsx" onclick="exitFS()">✕</button>
+  <div class="fs-pad" id="fs-pad"></div>
+  <input class="fs-sp" id="fs-sp" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value">
+  <div class="fs-act" id="fs-act"></div>
+</div>
 
 <dialog id="opts"><div class="in">
   <h3>Add-on settings</h3><div id="optform"></div>
@@ -533,6 +562,56 @@ function thumb(n){return `${B}/api/snapshot?node=${encodeURIComponent(n)}&t=${Ma
 function openRobot(n){SEL=n; render(true)}
 function goBack(){SEL=null; render(true)}
 
+// --- driving: hold a D-pad button to move, release to stop (analog vector + watchdog) ---
+let driveSpeed=60, moveNode=null, moveTimer=null;
+const DIRV={fwd:[-1,0],back:[1,0],left:[0,-1],right:[0,1]};
+function sendVec(node,ly,rx,hold){
+  fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({node,suffix:'move/vector',payload:JSON.stringify({ly,rx,hold})})}).catch(()=>{});
+}
+function startMove(node,dir){
+  const d=DIRV[dir]; if(!d) return; stopMove(); moveNode=node;
+  const ly=Math.round(d[0]*driveSpeed), rx=Math.round(d[1]*driveSpeed);
+  sendVec(node,ly,rx,0.7); moveTimer=setInterval(()=>sendVec(node,ly,rx,0.7),350);
+}
+function stopMove(){
+  if(moveTimer){clearInterval(moveTimer);moveTimer=null;}
+  if(moveNode){sendVec(moveNode,0,0,0); moveNode=null;}
+}
+function dpad(node){
+  const h=d=>`onpointerdown="event.preventDefault();startMove('${node}','${d}')" onpointerup="stopMove()" onpointerleave="stopMove()" onpointercancel="stopMove()"`;
+  return `<div class="dpad">
+    <button class="db up" ${h('fwd')}>▲</button>
+    <button class="db left" ${h('left')}>◀</button>
+    <button class="db stop" onclick="stopMove()">■</button>
+    <button class="db right" ${h('right')}>▶</button>
+    <button class="db down" ${h('back')}>▼</button>
+  </div>`;
+}
+// --- fullscreen gamepad: live view fills the screen, controls overlaid ---
+let fsTimer=null;
+function fsActions(node){
+  const b=(s,p,t)=>`<button class="btn" onclick="cmd('${node}','${s}','${p}')">${t}</button>`;
+  return b('camera/set','on','📷 Camera')+b('wake','','☀ Wake')+b('laser/set','on','• Laser')+b('dock','','⌂ Dock')+b('sleep/set','on','🌙 Standby');
+}
+function enterFS(node){
+  document.getElementById('fs-pad').innerHTML=dpad(node);
+  document.getElementById('fs-act').innerHTML=fsActions(node);
+  const v=document.getElementById('fsvid'); v.setAttribute('data-node',node);
+  document.getElementById('fs-sp').value=driveSpeed;
+  document.getElementById('fs').style.display='block';
+  const fs=document.getElementById('fs'); if(fs.requestFullscreen) fs.requestFullscreen().catch(()=>{});
+  if(fsTimer) clearInterval(fsTimer);
+  fsTimer=setInterval(()=>{ const im=new Image(); im.onload=()=>{v.src=im.src};
+    im.src=B+'/api/snapshot?node='+encodeURIComponent(node)+'&t='+Date.now(); },450);
+}
+function exitFS(){
+  stopMove(); if(fsTimer){clearInterval(fsTimer);fsTimer=null;}
+  document.getElementById('fs').style.display='none';
+  if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+}
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&document.getElementById('fs').style.display==='block') exitFS(); });
+
 function listView(){
   if(!ROBOTS.length) return `<div class="empty">Waiting for robots… make sure the add-on is running.</div>`;
   return `<div class="list">`+ROBOTS.map(r=>`
@@ -556,6 +635,17 @@ function detailView(r){
       <button class="btn" onclick="cmd('${r.node}','sleep/set','on')">🌙 Standby</button>
       <button class="btn" onclick="cmd('${r.node}','laser/set','on')">Laser</button>
       <button class="btn" onclick="cmd('${r.node}','dock','')">Dock</button>
+    </div>
+    <div class="sec"><h4>Drive</h4>
+      <div class="drive">
+        ${dpad(r.node)}
+        <div class="sp">
+          <label>Speed (${driveSpeed})</label>
+          <input type="range" min="1" max="100" value="${driveSpeed}" oninput="driveSpeed=+this.value;this.previousElementSibling.textContent='Speed ('+this.value+')'">
+          <button class="btn pri" style="margin-top:12px;width:100%" onclick="enterFS('${r.node}')">⛶ Fullscreen gamepad</button>
+        </div>
+      </div>
+      <div class="note" style="font-size:11px;color:#8a929a;margin-top:8px">Hold a button to move; release to stop. The camera must be on to see the live view.</div>
     </div>
     <div class="sec"><h4>Robot settings</h4>
       <label>Video quality</label><select onchange="cmd('${r.node}','video_quality/set',this.value)">${opt(VQ,st.video_quality)}</select>

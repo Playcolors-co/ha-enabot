@@ -1,0 +1,47 @@
+# EBO drive card — camera with a D-pad overlaid, for ANY Home Assistant user (non-admin too).
+#
+# Non-admin users can't see the add-on panel (admin-only), but they CAN use dashboards. Put this
+# card on a dashboard/view and give the user access to it — they get live video + driving.
+#
+# HOW TO USE
+# 1. Settings → Dashboards → (your dashboard) → Edit → ⋮ → "Edit in YAML" (or add a card → Manual).
+# 2. Paste the card below. Replace the entity ids to match YOUR robot: if your robot's device is
+#    named "Salotto", the entities are camera.salotto, button.salotto_forward, etc. (For a device
+#    named "EBO" they're camera.ebo / button.ebo_forward … as written here.)
+# 3. To let a specific (non-admin) user drive: put this card on a view and restrict that view's
+#    visibility to that user (view settings → Visibility). Non-admins never reach Settings/pairing.
+#
+# Each button drives for ~1s then the robot stops itself (watchdog). For smooth hold-to-drive,
+# use the custom joystick card (lovelace/ebo-joystick-card.js) instead.
+
+type: picture-elements
+camera_image: camera.ebo
+elements:
+  - type: icon
+    icon: mdi:arrow-up-bold
+    style: {top: 62%, left: 50%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_forward}}
+  - type: icon
+    icon: mdi:arrow-down-bold
+    style: {top: 90%, left: 50%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_back}}
+  - type: icon
+    icon: mdi:arrow-left-bold
+    style: {top: 76%, left: 38%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_left}}
+  - type: icon
+    icon: mdi:arrow-right-bold
+    style: {top: 76%, left: 62%, "--mdc-icon-size": 40px, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_right}}
+  - type: icon
+    icon: mdi:stop
+    style: {top: 76%, left: 50%, "--mdc-icon-size": 36px, color: white, background: "#c0392bcc", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_stop}}
+  - type: icon
+    icon: mdi:weather-sunny
+    style: {top: 10%, left: 8%, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_wake}}
+  - type: icon
+    icon: mdi:home-import-outline
+    style: {top: 10%, left: 92%, color: white, background: "#0007", border-radius: 10px, padding: 6px}
+    tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.ebo_dock}}

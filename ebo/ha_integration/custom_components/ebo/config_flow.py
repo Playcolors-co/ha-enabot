@@ -14,14 +14,16 @@ from typing import Any
 import async_timeout
 import voluptuous as vol
 
-from homeassistant.components.hassio import is_hassio
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.service_info.hassio import HassioServiceInfo
+
+try:  # HA moved is_hassio to helpers.hassio (2025+); fall back for older cores.
+    from homeassistant.helpers.hassio import is_hassio
+except ImportError:  # pragma: no cover
+    from homeassistant.components.hassio import is_hassio
 
 from . import hassio_addon
 from .const import (
-    API_PORT,
     CONF_API,
     CONF_MAC,
     CONF_MODEL,
@@ -83,19 +85,6 @@ class EboConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
                 new += 1
         return new
-
-    # --- Supervisor discovery from the add-on ({host, port, token}) -----------------
-
-    async def async_step_hassio(
-        self, discovery_info: HassioServiceInfo
-    ) -> ConfigFlowResult:
-        cfg = discovery_info.config or {}
-        host, token = cfg.get("host"), cfg.get("token")
-        if not host or not token:
-            return self.async_abort(reason="invalid_discovery")
-        api = f"http://{host}:{cfg.get('port', API_PORT)}"
-        await self._spawn_new(api, token)
-        return self.async_abort(reason="addon")
 
     # --- user clicked "＋ Add integration → EBO" ------------------------------------
 

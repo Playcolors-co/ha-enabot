@@ -1,5 +1,32 @@
 # Changelog — Enabot integration
 
+## 0.26.4 — driving available to any user (dashboard), not just the admin panel
+- The integration now exposes **movement buttons** (Forward / Back / Turn left / Turn right / Stop)
+  per robot, so the robot can be driven from a **Home Assistant dashboard by non-admin users** — the
+  add-on panel stays admin-only (settings + pairing). Each press drives ~1s then stops (watchdog).
+- Added a ready **drive card** (`lovelace/ebo-drive-card.yaml`): the camera with a D-pad overlaid;
+  restrict its view to a user to give them driving without admin access.
+
+
+## 0.26.3 — camera self-heals its RTSP URL
+- The integration camera now reads the **current** RTSP URL from the add-on on each update, so it
+  fixes itself when the add-on's address changes — no need to remove and re-add the robot.
+
+## 0.26.2 — drive from the panel (D-pad + fullscreen gamepad) + camera reachability fix
+- **Panel driving:** each robot's page now has a **D-pad** (hold to move, release to stop; analog
+  vector with a watchdog) and a **⛶ Fullscreen gamepad** mode — the live view fills the screen with
+  the D-pad and quick actions (camera/wake/laser/dock/standby) overlaid. Movement commands are now
+  allowed from the panel (you drive while watching the view).
+- **Camera fix:** the integration's camera RTSP now uses the add-on's **internal hostname** (like
+  the data API), reachable by Home Assistant core regardless of LAN/VLAN — previously it used a
+  guessed LAN IP and could be unreachable (go2rtc "connection refused").
+
+## 0.26.1 — fix integration load on Home Assistant 2026.7
+- The integration's config flow failed to load on recent Home Assistant ("Invalid handler
+  specified") because `is_hassio` moved to `homeassistant.helpers.hassio`. Now imported from there
+  (with a fallback), and the unused Supervisor-discovery step was removed. Verified live: robots
+  are added as native EBO devices.
+
 ## 0.26.0 — native-only, no MQTT, one repo, self-installing integration
 - **Renamed `ebo_air2` → `ebo`** (add-on slug, integration domain, topics) so it's generic for
   future robot models; robots stay distinct via their `model`.
