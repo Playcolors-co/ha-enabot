@@ -1,5 +1,12 @@
 # Changelog — Enabot integration
 
+## 0.25.2 — command-dispatch timing (proves the lag is the cloud, not the transport)
+- The bridge logs the **local** cost of dispatching a command (the only part MQTT-vs-native could
+  affect); it's normally a few ms, so it stays silent unless it exceeds 25 ms. The rest of the
+  perceived lag is the Agora **cloud** round-trip, which no transport choice removes. Use the
+  **native integration** (default): robots show as **distinct devices under the EBO integration**
+  (not under MQTT) with the same latency.
+
 ## 0.25.1 — same engine runs standalone (HA Container/Core, x86_64)
 - `run.sh` can synthesize its config from **environment variables** (`EBO_EMAIL`, `EBO_PASSWORD`,
   `EBO_PAYLOAD_KEY`, `EBO_SIGN_KEY`, `EBO_EXPOSE_MQTT`) and honor a pinned `EBO_API_TOKEN`, so the

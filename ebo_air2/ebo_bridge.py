@@ -773,11 +773,19 @@ class Bridge:
         if data is not None:
             msg["data"] = data
         payload = json.dumps(msg, separators=(",", ":")).encode()
+        t0 = time.perf_counter()
         try:
             r, _ = self.rtm.publish(self.s["robot_rtm"], payload, self._opts())
         except Exception as e:
             log("[!] publish %s error: %s" % (mid, e))
             return
+        # The LOCAL cost of dispatching a command (what MQTT-vs-native would change) — normally a
+        # few ms. The rest of the perceived lag is the Agora CLOUD round-trip, which no transport
+        # choice can remove. Only log when the local part is unexpectedly slow, to keep it honest.
+        dt = (time.perf_counter() - t0) * 1000.0
+        if dt > 25:
+            log("[timing] local RTM dispatch of cmd %s took %.0f ms "
+                "(cloud round-trip is separate)" % (mid, dt))
         if r != 0:
             log("[!] publish %s failed: %s" % (mid, self.rtm.get_error_reason(r)))
 

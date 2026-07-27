@@ -27,12 +27,20 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/playcolors-co/ebo-engine
+          tags: |
+            type=raw,value=latest
+            type=match,pattern=engine-v(.*),group=1
+            type=sha
+
       - name: Build and push (amd64)
         uses: docker/build-push-action@v6
         with:
           context: ./ebo_air2
           platforms: linux/amd64
           push: true
-          tags: |
-            ghcr.io/playcolors-co/ebo-engine:latest
-            ghcr.io/playcolors-co/ebo-engine:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
