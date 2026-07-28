@@ -39,7 +39,6 @@ MQTT_PASS = os.environ.get("EBO_MQTT_PASS", "") or None
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 API_PORT = int(os.environ.get("EBO_API_PORT", "8098"))
 API_TOKEN = os.environ.get("EBO_API_TOKEN", "")
-PANEL_CFG = "/data/panel.json"
 
 # Command suffixes the panel may publish (allow-list). Movement is excluded on purpose.
 ALLOWED_CMDS = {
@@ -47,29 +46,14 @@ ALLOWED_CMDS = {
     "say", "talk",
     "video_quality/set", "image_style/set", "volume/set", "talkback_volume/set",
     "speed/set", "sports_record/set", "call_rec/set", "eyes/set",
+    "move_mode/set", "avoid_obstacle/set", "night_vision/set",
+    # raw opcode escape hatch for AI/automation (and the eyes protocol): {"id":<op>,"data":{...}}
+    "cmd",
 }
 
-# Add-on settings the panel manages (stored in /data/panel.json, read by run.sh). Everything
-# except the account login (email/password) lives here now, not in the Configuration tab.
-EDITABLE_OPTS = {
-    # NB: expose_mqtt now lives in the add-on options (Configuration tab / set by the integration),
-    # not here — so it can be provisioned by the Enabot integration via Supervisor.
-    "video": {"type": "bool", "default": True, "label": "Video"},
-    "audio": {"type": "bool", "default": True, "label": "Audio (listen — best-effort)"},
-    "talk": {"type": "bool", "default": False, "label": "Talk (speak to the robot)"},
-    "video_max_height": {"type": "int", "default": 720, "label": "Video max height (px)"},
-    "video_fps": {"type": "int", "default": 20, "label": "Video FPS"},
-    "video_bitrate": {"type": "int", "default": 2500, "label": "Video bitrate (kbps, 0 = uncapped)"},
-    "video_preset": {"type": "select",
-                     "choices": ["ultrafast", "superfast", "veryfast", "faster", "fast"],
-                     "default": "ultrafast", "label": "Video encoder preset"},
-    "audio_codec": {"type": "select", "choices": [8, 9], "default": 8, "label": "Audio codec"},
-    # log_level lives in the add-on Configuration tab now (not here).
-    "region": {"type": "text", "default": "GB", "label": "Account region"},
-    "host": {"type": "text", "default": "ebox-eu.enabotserverintl.com",
-             "label": "Account server host"},
-    "robot_id": {"type": "int", "default": 0, "label": "Robot id (0 = all robots)"},
-}
+# All add-on settings (account/connection + audio/video processing) now live in the add-on
+# Configuration tab (/data/options.json), read by run.sh — the panel no longer has a Settings dialog.
+# Per-robot settings (video quality, eyes, volume, speed…) are on the robot's detail page.
 
 _robots = {}
 _lock = threading.Lock()
@@ -136,43 +120,6 @@ def _start_mqtt():
 
 
 # --------------------------- operational settings (/data/panel.json) ---------------------------
-def _read_cfg():
-    try:
-        with open(PANEL_CFG) as f:
-            cur = json.load(f)
-    except Exception:
-        cur = {}
-    return {k: cur.get(k, s["default"]) for k, s in EDITABLE_OPTS.items()}
-
-
-def _coerce(k, v):
-    t = EDITABLE_OPTS[k]["type"]
-    if t == "bool":
-        return v is True or str(v).lower() == "true"
-    if t == "int":
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return EDITABLE_OPTS[k]["default"]
-    if t == "select" and all(isinstance(c, int) for c in EDITABLE_OPTS[k]["choices"]):
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return EDITABLE_OPTS[k]["default"]
-    return v
-
-
-def _save_cfg(patch):
-    cur = _read_cfg()
-    for k, v in patch.items():
-        if k in EDITABLE_OPTS:
-            cur[k] = _coerce(k, v)
-    with open(PANEL_CFG, "w") as f:
-        json.dump(cur, f)
-    log("[panel] saved /data/panel.json — restarting add-on to apply")
-    threading.Thread(target=_restart_self, daemon=True).start()
-
-
 def _restart_self():
     time.sleep(1)
     try:
@@ -345,8 +292,6 @@ class Handler(BaseHTTPRequestHandler):
         if path.endswith("/api/robots"):
             with _lock:
                 return self._send(200, json.dumps(list(_robots.values())))
-        if path.endswith("/api/options"):
-            return self._send(200, json.dumps({"values": _read_cfg(), "schema": EDITABLE_OPTS}))
         if path.endswith("/api/account"):
             return self._send(200, json.dumps({"email": EMAIL}))
         if path.endswith("/api/snapshot"):
@@ -485,13 +430,6 @@ class Handler(BaseHTTPRequestHandler):
             _client.publish("%s/%s" % (node, suffix), str(body.get("payload", "")))
             log("[panel] cmd %s/%s = %s" % (node, suffix, body.get("payload", "")))
             return self._send(200, json.dumps({"ok": True}))
-        if path.endswith("/api/options"):
-            try:
-                _save_cfg(body.get("options", {}))
-                return self._send(200, json.dumps({"ok": True, "restarting": True}))
-            except Exception as e:
-                log("[panel] save options failed:", e)
-                return self._send(500, json.dumps({"error": str(e)}))
         if path.endswith("/api/pair/start"):
             try:
                 return self._send(200, json.dumps(
@@ -544,6 +482,11 @@ header{padding:14px 18px;font-size:20px;font-weight:600;display:flex;justify-con
 @media(prefers-color-scheme:dark){.sec{background:#1c2126}}
 .sec h4{margin:0 0 8px;font-size:14px;color:#8a929a;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
 label{font-size:12px;color:#8a929a;display:block;margin:10px 0 3px}
+label.tgl{display:flex;align-items:center;justify-content:space-between;gap:12px;color:inherit;font-size:14px;margin:14px 0 3px}
+label.tgl input[type=checkbox]{width:44px;height:26px;flex:none;-webkit-appearance:none;appearance:none;background:#c8ccd0;border-radius:13px;position:relative;cursor:pointer;transition:background .15s;margin:0}
+label.tgl input[type=checkbox]:checked{background:#12b886}
+label.tgl input[type=checkbox]::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s}
+label.tgl input[type=checkbox]:checked::after{left:21px}
 select,input[type=number]{width:100%;padding:8px;border-radius:8px;border:1px solid #0002;background:transparent;color:inherit}
 input[type=range]{width:100%}
 .url{font-size:11px;color:#8a929a;word-break:break-all;margin-top:10px}
@@ -555,23 +498,52 @@ input[type=range]{width:100%}
 .db:active{background:#2b6cff;color:#fff}
 .db.up{grid-area:1/2}.db.left{grid-area:2/1}.db.stop{grid-area:2/2;background:#c0392b;color:#fff}.db.right{grid-area:2/3}.db.down{grid-area:3/2}
 .drive .sp{flex:1;min-width:150px}
+/* analog joystick (drag the knob to drive; up=forward, sides=turn, diagonal=curve) */
+.joy{width:170px;height:170px;border-radius:50%;position:relative;flex:none;touch-action:none;user-select:none;-webkit-user-select:none;
+  background:radial-gradient(circle at 50% 42%,#3a4048,#1b2025);border:1px solid #ffffff14;box-shadow:inset 0 2px 10px #0007}
+.joy::before{content:'';position:absolute;inset:20px;border-radius:50%;border:1px dashed #ffffff1f}
+.joy-knob{position:absolute;left:50%;top:50%;width:66px;height:66px;margin:-33px 0 0 -33px;border-radius:50%;
+  background:radial-gradient(circle at 40% 33%,#5a97ff,#2b6cff);box-shadow:0 3px 12px #0009;transition:transform .06s ease-out;pointer-events:none}
+.joy.drag .joy-knob{transition:none}
 /* fullscreen gamepad */
 #fs{position:fixed;inset:0;background:#000;z-index:9999;display:none}
 #fsvid{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000;object-fit:contain}
 .fs-tap{position:absolute;inset:0;z-index:1}   /* tap the video to show/hide controls */
-.fsx{position:absolute;top:12px;right:14px;z-index:2;background:#000a;color:#fff;border:0;border-radius:50%;width:42px;height:42px;font-size:18px;cursor:pointer}
-.fs-pad{position:absolute;left:22px;bottom:22px;z-index:2;opacity:.92}
-.fs-pad .dpad{grid-template-columns:repeat(3,68px);grid-template-rows:repeat(3,68px)}
-.fs-pad .db{background:#ffffff26;color:#fff;backdrop-filter:blur(3px)}
-.fs-act{position:absolute;right:22px;bottom:22px;z-index:2;display:flex;flex-direction:column;gap:10px;opacity:.92}
-.fs-act .btn{background:#ffffff26;color:#fff;backdrop-filter:blur(3px);min-width:120px}
-.fs-sp{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);z-index:2;width:200px;opacity:.9}
-#fs.hidectl .fs-pad,#fs.hidectl .fs-act,#fs.hidectl .fs-sp{display:none}
-/* press feedback (so you SEE the button react) */
+/* fullscreen top bar: info (battery/signal/video) on the left, actions on the right (like the app) */
+.fs-top{position:absolute;top:0;left:0;right:0;z-index:3;display:flex;justify-content:space-between;align-items:center;
+  gap:10px;padding:10px 14px;color:#fff;font-size:13px;background:linear-gradient(#000a,#0000)}
+.fs-info{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.fs-info .b{background:#0006;padding:3px 8px;border-radius:8px;backdrop-filter:blur(3px)}
+.fs-actions{display:flex;align-items:center;gap:8px}
+.fs-ic{width:46px;height:46px;border-radius:50%;background:#0007;color:#fff;border:0;font-size:19px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.fs-ic:active{transform:scale(.92)}.fs-ic.on{background:#2b6cff}
+.fs-ic.disabled{opacity:.35;pointer-events:none}
+/* driving controls container (dual sticks or a single joystick, chosen in fullscreen Settings) */
+#fs-drive{position:absolute;inset:0;z-index:2;pointer-events:none}
+#fs-drive .stick,#fs-drive .joy{pointer-events:auto}
+/* one-axis sticks are slim tracks (no need for a full circle): vertical = tall+narrow, horiz = wide+short */
+.stick{position:absolute;bottom:30px;touch-action:none;user-select:none;-webkit-user-select:none;
+  background:linear-gradient(#ffffff1e,#00000055);border:1px solid #ffffff1f;backdrop-filter:blur(3px)}
+.stick[data-axis=v]{width:88px;height:210px;border-radius:44px}
+.stick[data-axis=h]{width:210px;height:88px;border-radius:44px}
+.fs-lstick{left:28px}.fs-rstick{right:28px}
+.fs-single{position:absolute;bottom:26px;width:200px;height:200px;border-radius:50%;
+  background:radial-gradient(circle at 50% 42%,#ffffff26,#00000055);backdrop-filter:blur(3px)}
+.fs-single.left{left:28px}.fs-single.center{left:50%;transform:translateX(-50%)}.fs-single.right{right:28px}
+.fs-single .joy-knob{width:76px;height:76px;margin:-38px 0 0 -38px}
+.stick .joy-knob{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px 0 0 -32px;border-radius:50%;
+  background:radial-gradient(circle at 40% 33%,#5a97ff,#2b6cff);box-shadow:0 3px 12px #0009;pointer-events:none;transition:transform .06s ease-out}
+.stick.drag .joy-knob{transition:none}
+.stick .ax{position:absolute;color:#ffffff88;font-size:13px}
+.stick[data-axis=v] .ax.a1{top:7px;left:50%;transform:translateX(-50%)}
+.stick[data-axis=v] .ax.a2{bottom:7px;left:50%;transform:translateX(-50%)}
+.stick[data-axis=h] .ax.a1{left:7px;top:50%;transform:translateY(-50%)}
+.stick[data-axis=h] .ax.a2{right:7px;top:50%;transform:translateY(-50%)}
+#fs.hidectl .fs-top,#fs.hidectl #fs-drive{display:none}
+/* press feedback */
 .btn:active{transform:scale(.96);filter:brightness(1.3)}
 .db.on,.db:active{background:#2b6cff !important;color:#fff !important;transform:scale(.9)}
-.fs-pad .db.on,.fs-pad .db:active{background:#2b6cffcc !important}
-.fs-act .btn:active{background:#2b6cffcc !important}
 /* list action icons + detail camera hint + charging warning */
 .ic{border:0;background:transparent;font-size:20px;cursor:pointer;padding:6px 8px;border-radius:9px;line-height:1;flex:none}
 .ic:hover{background:#0001}
@@ -582,30 +554,64 @@ input[type=range]{width:100%}
 dialog{border:0;border-radius:14px;padding:0;max-width:440px;width:92%;background:#fff;color:#111}
 @media(prefers-color-scheme:dark){dialog{background:#1c2126;color:#e9ecef}}
 dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;margin-top:10px}
+.tabs{display:flex;gap:6px;margin:0 0 4px;border-bottom:1px solid #0001;padding-bottom:2px}
+.tab{flex:1;border:0;background:transparent;color:#8a929a;font-size:13px;font-weight:600;padding:8px 4px;cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{color:inherit;border-bottom-color:#2b6cff}
 </style></head><body>
 <header>
   <span><span id="title" onclick="goBack()" style="cursor:pointer">🤖 EBO</span>
         <span id="acct" style="font-size:12px;color:#8a929a;font-weight:400"></span></span>
-  <span><button class="btn" id="addbtn" onclick="openAdd()">+ Add robot</button>
-        <button class="btn" onclick="openOpts()">⚙ Settings</button></span>
+  <span><button class="btn" id="addbtn" onclick="openAdd()">+ Add robot</button></span>
 </header>
 <div id="view"></div>
 
 <div id="fs" tabindex="0">
   <video id="fsvid" autoplay muted playsinline></video>
   <div class="fs-tap" onclick="toggleFsControls()"></div>
-  <button class="fsx" onclick="exitFS()">✕</button>
-  <div class="fs-pad" id="fs-pad"></div>
-  <input class="fs-sp" id="fs-sp" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value">
-  <div class="fs-act" id="fs-act"></div>
+  <div class="fs-top" id="fs-top"></div>
+  <div id="fs-drive"></div>
 </div>
 
-<dialog id="opts"><div class="in">
-  <h3>Add-on settings</h3><div id="optform"></div>
-  <div class="row" style="justify-content:flex-end;margin-top:16px">
-    <button class="btn" onclick="document.getElementById('opts').close()">Cancel</button>
-    <button class="btn pri" onclick="saveOpts()">Save &amp; restart</button></div>
-  <div class="note">Saving restarts the add-on (brief interruption).</div>
+<dialog id="fsopts"><div class="in">
+  <h3>Drive settings</h3>
+  <div class="tabs">
+    <button class="tab on" data-tab="set" onclick="fsTab('set')">Settings</button>
+    <button class="tab" data-tab="ctl" onclick="fsTab('ctl')">Controls</button>
+    <button class="tab" data-tab="aux" onclick="fsTab('aux')">Auxiliary</button>
+  </div>
+  <div class="tabp" data-tab="set">
+    <label>Driving mode</label>
+    <select id="fs-dm" onchange="if(fsNode)cmd(fsNode,'move_mode/set',this.value)">${''}</select>
+    <label>Movement speed (<span id="fs-mspd-v">—</span>)</label>
+    <input id="fs-mspd" type="range" min="1" max="100" value="50" onchange="if(fsNode)cmd(fsNode,'speed/set',this.value)" oninput="document.getElementById('fs-mspd-v').textContent=this.value">
+    <label>Call volume (<span id="fs-cvol-v">—</span>)</label>
+    <input id="fs-cvol" type="range" min="0" max="100" value="50" onchange="if(fsNode)cmd(fsNode,'talkback_volume/set',this.value)" oninput="document.getElementById('fs-cvol-v').textContent=this.value">
+  </div>
+  <div class="tabp" data-tab="ctl" style="display:none">
+    <label>Controls</label>
+    <select id="fs-ctrl" onchange="setFsCtrl(this.value)">
+      <option value="dual">Two sticks (drive + steer)</option>
+      <option value="joy">Single joystick</option>
+    </select>
+    <label id="fs-swaprow" style="display:flex;align-items:center;gap:8px;margin-top:10px">
+      <input type="checkbox" id="fs-swap" style="width:auto" onchange="setFsSwap(this.checked)"> Swap the two sticks (steer on the left, drive on the right)
+    </label>
+    <label id="fs-joyrow" style="display:none">Joystick side
+      <select id="fs-joyside" onchange="setFsJoySide(this.value)">
+        <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
+      </select>
+    </label>
+    <label>Joystick sensitivity (<span id="fs-spd-v">60</span>)</label>
+    <input id="fs-spd" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value;document.getElementById('fs-spd-v').textContent=this.value">
+    <label>Video quality</label><select id="fs-vq" onchange="if(fsNode)cmd(fsNode,'video_quality/set',this.value)">${''}</select>
+  </div>
+  <div class="tabp" data-tab="aux" style="display:none">
+    <label class="tgl"><span>Collision avoidance</span>
+      <input type="checkbox" id="fs-avoid" onchange="if(fsNode)cmd(fsNode,'avoid_obstacle/set',this.checked?'on':'off')"></label>
+    <div class="note">The Enabot app also shows "Auxiliary View" here — that's an app-only on-screen overlay, not a robot setting, so it isn't included.</div>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn pri" onclick="document.getElementById('fsopts').close()">Done</button></div>
+  <div class="note">More actions (talk, listen, recording, snapshot, patrol) coming soon.</div>
 </div></dialog>
 
 <dialog id="add"><div class="in">
@@ -636,7 +642,10 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
 <script>
 const B = window.location.pathname.replace(/\/$/,'');
 (function(){ const s=document.createElement('script'); s.src=B+'/hls.min.js'; s.async=true; document.head.appendChild(s); })();  // fluid HLS player
-const VQ=["Low","Medium","High"], IS=["Standard","Vivid","Soft"], EY=["Dynamic","Clock","Custom"];
+const VQ=["Low","Medium","High"], IS=["Standard","Vivid","Soft"],
+      EY=["Dynamic 1","Dynamic 2","Dynamic 3","Dynamic 4","Dynamic 5","Dynamic 6","Clock 1","Clock 2","Custom"],
+      DM=["Smooth","Racing"],   // driving mode (app: Driving Mode Smooth/Racing)
+      NV=["Auto","Day","Night"], NV_ICON={Auto:'🌗',Day:'☀️',Night:'🌙'};  // day/night vision (app btnDayNight)
 let ROBOTS=[], SEL=null;
 async function cmd(node,suffix,payload){
   await fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -649,6 +658,50 @@ function meta(r){const st=r.state||{};
   return `${r.model||'EBO'} · 🔋 ${bat} · 📶 ${wifi}`;}
 function thumb(n){return `${B}/api/snapshot?node=${encodeURIComponent(n)}&t=${Math.floor(Date.now()/4000)}`}
 function bg(node,suffix,payload){ fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node,suffix,payload})}).catch(()=>{}); }
+// Laser is a TOGGLE: the robot reports its state (state.laser), so read it at click time and send
+// the opposite. Sending 'on' unconditionally (the old behaviour) could never turn it off.
+// The robot reports laserStatus with a few seconds' lag, and refresh() overwrites ROBOTS wholesale —
+// so an optimistic toggle would flicker back when a stale poll lands. We hold the optimistic value
+// until the real state catches up (or a short timeout), which kills the flicker.
+let laserPending={};
+function laserOn(node){
+  const r=ROBOTS.find(x=>x.node===node);
+  const real=!!(r&&r.state&&(r.state.laser==='true'||r.state.laser===true));
+  const p=laserPending[node];
+  if(p){ if(real===p.val || Date.now()>=p.until){ delete laserPending[node]; return real; } return p.val; }
+  return real;
+}
+function updateLaserUI(node){
+  const on=laserOn(node);
+  const db=document.getElementById('d-laser'); if(db){ db.className='btn '+(on?'pri':''); db.textContent='Laser '+(on?'ON':'OFF'); }
+  const fb=document.getElementById('fs-laser'); if(fb) fb.className='fs-ic '+(on?'on':'');
+}
+function toggleLaser(node){
+  const nv=!laserOn(node);
+  laserPending[node]={val:nv, until:Date.now()+6000};   // optimistic feedback, held until telemetry agrees
+  updateLaserUI(node);
+  cmd(node,'laser/set', nv?'on':'off');
+}
+// Day/night vision (app's fullscreen day/night button = shootMode 0 Auto / 1 Day / 2 Night).
+let nightPending={};
+function nightMode(node){
+  const r=ROBOTS.find(x=>x.node===node)||{}, st=r.state||{};
+  const real=NV.includes(st.night_vision)?st.night_vision:'Auto';
+  const p=nightPending[node];
+  if(p){ if(real===p.val || Date.now()>=p.until){ delete nightPending[node]; return real; } return p.val; }
+  return real;
+}
+function updateNightUI(node){
+  const m=nightMode(node);
+  const fb=document.getElementById('fs-night');
+  if(fb){ fb.textContent=NV_ICON[m]||'🌗'; fb.title='Day/Night vision: '+m+' (tap to change)'; fb.className='fs-ic'+(m==='Night'?' on':''); }
+}
+function cycleNight(node){
+  const next=NV[(NV.indexOf(nightMode(node))+1)%NV.length];
+  nightPending[node]={val:next, until:Date.now()+8000};   // optimistic; released when telemetry agrees
+  updateNightUI(node);
+  cmd(node,'night_vision/set', next);
+}
 // Enter detail/drive → camera/set on. Bridge-side this JOINS the Agora RTC channel, which WAKES
 // the robot exactly like opening the app (real viewer present). goBack → connected/set off leaves
 // the channel so the robot goes back to standby (ZZ). No unreliable isSleeping opcode dance.
@@ -702,11 +755,125 @@ function dpad(node){
     <button class="db down" ${h('back')}>▼</button>
   </div>`;
 }
+// --- analog joystick: drag the knob; vertical = forward/back, horizontal = turn, diagonal = a
+// smooth curve (both axes together). Sends move/vector at ~8 Hz while held, zero on release. ---
+function joystick(node){
+  return `<div class="joy" data-node="${node}"><div class="joy-knob"></div></div>`;
+}
+function initJoysticks(){
+  document.querySelectorAll('.joy').forEach(j=>{
+    if(j._init) return; j._init=true;
+    const knob=j.querySelector('.joy-knob'), node=j.getAttribute('data-node');
+    let cx=0,cy=0,R=1,vx=0,vy=0,timer=null;
+    const tick=()=>{ if(vx||vy) sendVec(node, Math.round(vy*driveSpeed), Math.round(vx*driveSpeed), 0.6); };
+    const aim=(px,py)=>{ let dx=(px-cx)/R, dy=(py-cy)/R; const m=Math.hypot(dx,dy); if(m>1){dx/=m;dy/=m;}
+      vx=dx; vy=dy; knob.style.transform='translate('+(dx*R*0.6)+'px,'+(dy*R*0.6)+'px)'; };
+    const down=e=>{ const b=j.getBoundingClientRect(); cx=b.left+b.width/2; cy=b.top+b.height/2; R=b.width/2;
+      j.classList.add('drag'); try{j.setPointerCapture(e.pointerId);}catch(x){} aim(e.clientX,e.clientY);
+      if(!timer) timer=setInterval(tick,120); tick(); e.preventDefault(); };
+    const move=e=>{ if(!timer) return; aim(e.clientX,e.clientY); e.preventDefault(); };
+    const up=()=>{ vx=vy=0; knob.style.transform='translate(0,0)'; j.classList.remove('drag');
+      if(timer){clearInterval(timer);timer=null;} sendVec(node,0,0,0); };
+    j.addEventListener('pointerdown',down); j.addEventListener('pointermove',move);
+    j.addEventListener('pointerup',up); j.addEventListener('pointercancel',up);
+  });
+}
 // --- fullscreen gamepad: live view fills the screen, controls overlaid ---
-let fsTimer=null;
-function fsActions(node){
-  const b=(s,p,t)=>`<button class="btn" onclick="cmd('${node}','${s}','${p}')">${t}</button>`;
-  return b('camera/set','on','☀ Wake')+b('laser/set','on','• Laser')+b('dock','','⌂ Dock')+b('connected/set','off','🌙 Standby');
+let fsTimer=null, fsNode=null, fsDX=0, fsDY=0, fsDriveTimer=null;
+// driving-control preference (persisted): 'dual' = two sticks, 'joy' = one analog joystick.
+// fsDualSwap flips which side drives vs steers. Chosen in the fullscreen Settings menu.
+let fsCtrlMode = localStorage.getItem('ebo_fsctrl') || 'dual';
+let fsDualSwap = localStorage.getItem('ebo_fsswap') === '1';
+let fsJoySide  = localStorage.getItem('ebo_fsjoyside') || 'left';   // single-joystick side
+// fullscreen top bar: battery/signal/video on the LEFT (like the video overlay), minimal actions on
+// the RIGHT — Laser, Night vision (soon), Return to base, Settings. Talk/listen/record/snapshot/
+// patrol will join the action row later.
+function fsTop(node){
+  const r=ROBOTS.find(x=>x.node===node)||{}, st=r.state||{};
+  const laserOn=(st.laser==='true');
+  return `<div class="fs-info">
+      <button class="fs-ic" onclick="exitFS()" title="Back" style="width:40px;height:40px;font-size:24px">‹</button>
+      <span class="b" id="fs-badge2">···</span>
+      <span class="b" id="fs-bat">🔋 ${st.battery??'—'}%</span>
+      <span class="b" id="fs-wifi">📶 ${st.wifi??'—'}</span>
+    </div>
+    <div class="fs-actions">
+      <button class="fs-ic ${laserOn?'on':''}" id="fs-laser" onclick="toggleLaser('${node}')" title="Laser">•</button>
+      <button class="fs-ic" id="fs-night" onclick="cycleNight('${node}')" title="Day/Night vision">${NV_ICON[st.night_vision]||'🌗'}</button>
+      <button class="fs-ic" onclick="cmd('${node}','dock','')" title="Return to base">⌂</button>
+      <button class="fs-ic" onclick="openFsSettings()" title="Settings">⚙</button>
+    </div>`;
+}
+// dual-stick driving: LEFT = forward/back (vertical), RIGHT = turn (horizontal). Both can be held at
+// once (one thumb each) to drive a smooth curve. Sends the combined move/vector at ~8 Hz.
+function _fsDriveTick(){ if(fsNode && (fsDX||fsDY)) sendVec(fsNode, Math.round(fsDY*driveSpeed), Math.round(fsDX*driveSpeed), 0.6); }
+function initStick(el){
+  if(el._init) return; el._init=true;
+  const knob=el.querySelector('.joy-knob'), axis=el.getAttribute('data-axis');
+  let cx=0,cy=0,R=1;
+  const aim=(px,py)=>{ let dx=(px-cx)/R, dy=(py-cy)/R;
+    if(axis==='v'){ dx=0; dy=Math.max(-1,Math.min(1,dy)); fsDY=dy; }
+    else { dy=0; dx=Math.max(-1,Math.min(1,dx)); fsDX=dx; }
+    knob.style.transform='translate('+(dx*R*0.6)+'px,'+(dy*R*0.6)+'px)'; };
+  const down=e=>{ const b=el.getBoundingClientRect(); cx=b.left+b.width/2; cy=b.top+b.height/2;
+    R = (axis==='v') ? b.height/2 : b.width/2;      // range along the stick's own (single) axis
+    el.classList.add('drag'); try{el.setPointerCapture(e.pointerId);}catch(x){} aim(e.clientX,e.clientY);
+    if(!fsDriveTimer) fsDriveTimer=setInterval(_fsDriveTick,120); _fsDriveTick(); e.preventDefault(); };
+  const move=e=>{ if(!el.classList.contains('drag')) return; aim(e.clientX,e.clientY); e.preventDefault(); };
+  const up=()=>{ el.classList.remove('drag'); if(axis==='v')fsDY=0; else fsDX=0; knob.style.transform='translate(0,0)';
+    if(!fsDX && !fsDY){ if(fsDriveTimer){clearInterval(fsDriveTimer);fsDriveTimer=null;} if(fsNode) sendVec(fsNode,0,0,0); } };
+  el.addEventListener('pointerdown',down); el.addEventListener('pointermove',move);
+  el.addEventListener('pointerup',up); el.addEventListener('pointercancel',up);
+}
+function _fsStickEl(sideCls, axis){
+  const a = axis==='v' ? ['▲','▼'] : ['◀','▶'];
+  return `<div class="stick ${sideCls}" data-axis="${axis}"><span class="ax a1">${a[0]}</span><span class="ax a2">${a[1]}</span><div class="joy-knob"></div></div>`;
+}
+// Build the driving controls into #fs-drive according to the chosen mode. Dual = two one-axis sticks
+// (side of drive/steer flips with fsDualSwap); Joy = one two-axis analog joystick (centred).
+function renderFsControls(node){
+  const d=document.getElementById('fs-drive'); if(!d) return;
+  fsDX=0; fsDY=0; if(fsDriveTimer){clearInterval(fsDriveTimer);fsDriveTimer=null;}
+  if(fsCtrlMode==='joy'){
+    d.innerHTML=`<div class="joy fs-single ${fsJoySide}" data-node="${node}"><div class="joy-knob"></div></div>`;
+    initJoysticks();
+  } else {
+    const leftAxis = fsDualSwap?'h':'v', rightAxis = fsDualSwap?'v':'h';
+    d.innerHTML = _fsStickEl('fs-lstick',leftAxis) + _fsStickEl('fs-rstick',rightAxis);
+    d.querySelectorAll('.stick').forEach(initStick);
+  }
+}
+function setFsCtrl(mode){ fsCtrlMode=mode; localStorage.setItem('ebo_fsctrl',mode); if(fsNode) renderFsControls(fsNode); syncFsOpts(); }
+function setFsSwap(on){ fsDualSwap=!!on; localStorage.setItem('ebo_fsswap',on?'1':'0'); if(fsNode) renderFsControls(fsNode); }
+function setFsJoySide(side){ fsJoySide=side; localStorage.setItem('ebo_fsjoyside',side); if(fsNode) renderFsControls(fsNode); }
+function syncFsOpts(){
+  const sw=document.getElementById('fs-swaprow'); if(sw) sw.style.display = fsCtrlMode==='dual'?'flex':'none';
+  const jr=document.getElementById('fs-joyrow'); if(jr) jr.style.display = fsCtrlMode==='joy'?'':'none';
+}
+function fsTab(name){
+  document.querySelectorAll('#fsopts .tab').forEach(b=>b.classList.toggle('on',b.dataset.tab===name));
+  document.querySelectorAll('#fsopts .tabp').forEach(p=>p.style.display=(p.dataset.tab===name)?'':'none');
+}
+function openFsSettings(){
+  const d=document.getElementById('fsopts'); const r=ROBOTS.find(x=>x.node===fsNode)||{}, st=r.state||{};
+  // Settings tab (mirrors the app's fullscreen menu): driving mode, movement speed, call volume
+  document.getElementById('fs-dm').innerHTML=opt(DM, st.move_mode);
+  document.getElementById('fs-mspd').value=st.speed??50;
+  document.getElementById('fs-mspd-v').textContent=st.speed??'—';
+  document.getElementById('fs-cvol').value=st.talkback_volume??50;
+  document.getElementById('fs-cvol-v').textContent=st.talkback_volume??'—';
+  // Controls tab (our joystick config + video)
+  document.getElementById('fs-vq').innerHTML=opt(VQ, st.video_quality);
+  document.getElementById('fs-spd-v').textContent=driveSpeed;
+  d.querySelector('#fs-spd').value=driveSpeed;
+  document.getElementById('fs-ctrl').value=fsCtrlMode;
+  document.getElementById('fs-swap').checked=fsDualSwap;
+  document.getElementById('fs-joyside').value=fsJoySide;
+  // Auxiliary tab (collision avoidance)
+  document.getElementById('fs-avoid').checked = st.avoid_obstacle==='true';
+  syncFsOpts();
+  fsTab('set');
+  d.showModal();
 }
 let wakeTimer=null;
 // Fluid video: the add-on's Low-Latency HLS, played in a <video> via hls.js, PROXIED through
@@ -732,15 +899,10 @@ function _cleanupVid(v){
   try{ v.srcObject=null; }catch(e){}
   try{ v.removeAttribute('src'); v.load(); }catch(e){}
 }
-// small diagnostic badge (top-left): shows whether the live view is WebRTC (fluid) or HLS (fallback)
-// and the live decoded fps — so we can see, while driving, exactly what the video path is doing.
+// video-mode indicator shown in the top bar (WebRTC·fps, or HLS fallback, or connecting)
 function _fsBadge(txt){
-  const fs=document.getElementById('fs'); if(!fs) return;
-  let el=document.getElementById('fs-badge');
-  if(!el){ el=document.createElement('div'); el.id='fs-badge';
-    el.style.cssText='position:absolute;top:10px;left:10px;z-index:4;background:#000b;color:#0f8;font:12px monospace;padding:4px 8px;border-radius:8px;pointer-events:none';
-    fs.appendChild(el); }
-  el.textContent=txt;
+  const el=document.getElementById('fs-badge2');   // lives inside the top info bar (fsTop)
+  if(el) el.textContent=txt;
 }
 function _fsWatchStats(v, pc){
   if(v._statTimer) clearInterval(v._statTimer);
@@ -843,11 +1005,11 @@ async function fsPlay(node){
 }
 let _driveVQ=null;   // video quality saved on entering drive, restored on exit
 function enterFS(node){
-  document.getElementById('fs-pad').innerHTML=dpad(node);
-  document.getElementById('fs-act').innerHTML=fsActions(node);
+  fsNode=node; fsDX=0; fsDY=0;
+  document.getElementById('fs-top').innerHTML=fsTop(node);
+  renderFsControls(node);          // dual sticks or single joystick, per the saved preference
   const v=document.getElementById('fsvid');
   v.setAttribute('data-node',node);                 // keyboard driving reads the node from here
-  document.getElementById('fs-sp').value=driveSpeed;
   const fs=document.getElementById('fs'); fs.classList.remove('hidectl'); fs.style.display='block';
   fs.focus();                                       // keyboard focus so the arrow keys reach us
   bg(node,'camera/set','on');                       // join RTC + feed = wake (like opening the app)
@@ -867,6 +1029,8 @@ function enterFS(node){
 function toggleFsControls(){ document.getElementById('fs').classList.toggle('hidectl'); }
 function exitFS(){
   stopMove(); if(fsTimer){clearInterval(fsTimer);fsTimer=null;}
+  if(fsDriveTimer){clearInterval(fsDriveTimer);fsDriveTimer=null;} fsDX=0; fsDY=0;
+  if(fsNode) sendVec(fsNode,0,0,0); fsNode=null;
   if(wakeTimer){clearInterval(wakeTimer);wakeTimer=null;}
   const v=document.getElementById('fsvid');
   const node=v.getAttribute('data-node');
@@ -919,35 +1083,43 @@ function detailView(r){
       <button id="d-cam" class="btn ${cam?'pri':''}" onclick="cmd('${r.node}','camera/set','${cam?'off':'on'}')">${cam?'Camera ON':'Camera OFF'}</button>
       <button class="btn" onclick="cmd('${r.node}','camera/set','on')">☀ Wake</button>
       <button class="btn" onclick="cmd('${r.node}','connected/set','off')">🌙 Standby</button>
-      <button class="btn" onclick="cmd('${r.node}','laser/set','on')">Laser</button>
+      <button id="d-laser" class="btn ${st.laser==='true'?'pri':''}" onclick="toggleLaser('${r.node}')">Laser ${st.laser==='true'?'ON':'OFF'}</button>
       <button class="btn" onclick="cmd('${r.node}','dock','')">Dock</button>
     </div>
-    <div class="sec"><h4>Drive</h4>
+    <div class="sec"><h4>Remote control</h4>
       <div class="drive">
-        ${dpad(r.node)}
+        ${joystick(r.node)}
         <div class="sp">
-          <label>Speed (${driveSpeed})</label>
-          <input type="range" min="1" max="100" value="${driveSpeed}" oninput="driveSpeed=+this.value;this.previousElementSibling.textContent='Speed ('+this.value+')'">
-          <button class="btn pri" style="margin-top:12px;width:100%" onclick="enterFS('${r.node}')">⛶ Fullscreen gamepad</button>
+          <button class="btn pri" style="width:100%" onclick="enterFS('${r.node}')">⛶ Fullscreen</button>
+          <div class="note" style="font-size:11px;color:#8a929a;margin-top:10px">Joystick sensitivity is in the fullscreen ⚙ menu → Controls.</div>
         </div>
       </div>
-      <div class="note" style="font-size:11px;color:#8a929a;margin-top:8px">Hold a button to move; release to stop. The camera must be on to see the live view.</div>
+      <div class="note" style="font-size:11px;color:#8a929a;margin-top:8px">Drag the joystick to drive: up = forward, sides = turn, diagonal = curve. The camera must be on to see the live view.</div>
     </div>
-    <div class="sec"><h4>Robot settings</h4>
+    <div class="sec"><h4>Driving</h4>
+      <label>Driving mode</label><select onchange="cmd('${r.node}','move_mode/set',this.value)">${opt(DM,st.move_mode)}</select>
+      <label>Movement speed (${st.speed??'—'})</label>
+      <input type="range" min="1" max="100" value="${st.speed??50}" onchange="cmd('${r.node}','speed/set',this.value)">
+      <label class="tgl"><span>Collision avoidance</span>
+        <input type="checkbox" ${st.avoid_obstacle==='true'?'checked':''} onchange="cmd('${r.node}','avoid_obstacle/set',this.checked?'on':'off')"></label>
+    </div>
+    <div class="sec"><h4>Camera &amp; display</h4>
+      <label>Night vision</label><select onchange="cmd('${r.node}','night_vision/set',this.value)">${opt(NV,st.night_vision)}</select>
       <label>Video quality</label><select onchange="cmd('${r.node}','video_quality/set',this.value)">${opt(VQ,st.video_quality)}</select>
       <label>Image style</label><select onchange="cmd('${r.node}','image_style/set',this.value)">${opt(IS,st.image_style)}</select>
       <label>Eyes</label><select onchange="cmd('${r.node}','eyes/set',this.value)">${opt(EY,st.eyes)}</select>
-      <label>Volume (${st.volume??st.playback_volume??'—'})</label>
+    </div>
+    <div class="sec"><h4>Audio</h4>
+      <label>Volume — speaker (${st.volume??st.playback_volume??'—'})</label>
       <input type="range" min="0" max="100" value="${st.volume??st.playback_volume??50}" onchange="cmd('${r.node}','volume/set',this.value)">
-      <label>Speed (${st.speed??'—'})</label>
-      <input type="range" min="1" max="100" value="${st.speed??50}" onchange="cmd('${r.node}','speed/set',this.value)">
-      <div class="row">
-        <button class="btn" onclick="cmd('${r.node}','sports_record/set','on')">Motion rec ON</button>
-        <button class="btn" onclick="cmd('${r.node}','sports_record/set','off')">OFF</button>
-      </div>
+      <label>Call volume — two-way talk (${st.talkback_volume??'—'})</label>
+      <input type="range" min="0" max="100" value="${st.talkback_volume??50}" onchange="cmd('${r.node}','talkback_volume/set',this.value)">
+    </div>
+    <div class="sec"><h4>Recording</h4>
+      <label class="tgl"><span>Motion recording</span>
+        <input type="checkbox" ${st.sports_record==='true'?'checked':''} onchange="cmd('${r.node}','sports_record/set',this.checked?'on':'off')"></label>
     </div>
     <div class="row" style="margin-top:14px"><button class="btn danger" onclick="removeRobot('${r.node}')">🗑 Remove from account</button></div>
-    <div class="url">${esc(r.url)}</div>
   </div>`;
 }
 let lastSig=null;
@@ -960,6 +1132,7 @@ function render(force){
   document.getElementById('title').innerHTML = SEL? '‹ EBO' : '🤖 EBO';
   const r = SEL && ROBOTS.find(x=>x.node===SEL);
   document.getElementById('view').innerHTML = r? detailView(r) : listView();
+  initJoysticks();      // wire the analog joystick(s) in the freshly-rendered detail view
 }
 function updateValues(){
   if(SEL){
@@ -968,6 +1141,12 @@ function updateValues(){
     const dot=document.getElementById('d-dot'); if(dot) dot.className='dot '+(r.online?'on':'');
     const m=document.getElementById('d-meta'); if(m) m.textContent=`${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · 🔋 ${st.battery??'—'}% · 📶 ${st.wifi??'—'}`;
     const cb=document.getElementById('d-cam'); if(cb){ cb.className='btn '+(cam?'pri':''); cb.textContent=cam?'Camera ON':'Camera OFF'; cb.setAttribute('onclick',`cmd('${r.node}','camera/set','${cam?'off':'on'}')`); }
+    updateLaserUI(SEL);                                    // keep the laser toggle (detail + fullscreen) in sync
+    updateNightUI(SEL);                                    // keep the day/night button icon in sync
+    if(document.getElementById('fs').style.display==='block'){   // fullscreen open: refresh its top-bar info
+      const fb=document.getElementById('fs-bat'); if(fb) fb.textContent='🔋 '+(st.battery??'—')+'%';
+      const fw=document.getElementById('fs-wifi'); if(fw) fw.textContent='📶 '+(st.wifi??'—');
+    }
   }else{
     ROBOTS.forEach(r=>{
       const dot=document.getElementById('dot-'+r.node); if(dot) dot.className='dot '+(r.online?'on':'');
@@ -977,26 +1156,6 @@ function updateValues(){
 }
 async function refresh(){
   try{ ROBOTS = await (await fetch(B+'/api/robots')).json(); render(); }catch(e){}
-}
-async function openOpts(){
-  const d = await (await fetch(B+'/api/options')).json(); const sc=d.schema, v=d.values;
-  let h='';
-  for(const k in sc){const s=sc[k];
-    h+=`<label>${s.label||k}</label>`;
-    if(s.type==='bool') h+=`<select id="o-${k}"><option ${v[k]?'selected':''}>true</option><option ${!v[k]?'selected':''}>false</option></select>`;
-    else if(s.type==='select') h+=`<select id="o-${k}">${s.choices.map(c=>`<option ${c==v[k]?'selected':''}>${c}</option>`).join('')}</select>`;
-    else if(s.type==='text') h+=`<input id="o-${k}" type="text" value="${v[k]??''}">`;
-    else h+=`<input id="o-${k}" type="number" value="${v[k]??''}">`;
-  }
-  document.getElementById('optform').innerHTML=h;
-  document.getElementById('opts').showModal();
-}
-async function saveOpts(){
-  const d = await (await fetch(B+'/api/options')).json(); const sc=d.schema; const out={};
-  for(const k in sc){const el=document.getElementById('o-'+k); if(!el)continue;
-    out[k] = sc[k].type==='bool' ? (el.value==='true') : el.value;}
-  await fetch(B+'/api/options',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({options:out})});
-  document.getElementById('opts').close(); alert('Saved. The add-on is restarting…');
 }
 let pairTimer=null;
 function openAdd(){

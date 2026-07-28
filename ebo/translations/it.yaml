@@ -1,0 +1,62 @@
+configuration:
+  email:
+    name: Email account Enabot
+    description: L'email del tuo account Enabot (EBO HOME).
+  password:
+    name: Password account Enabot
+    description: La password del tuo account Enabot.
+  payload_key:
+    name: Chiave payload dell'app
+    description: La chiave AES payload dell'app EBO (16 caratteri). Obbligatoria — non è inclusa nel codice pubblico.
+  sign_key:
+    name: Chiave di firma dell'app
+    description: La chiave di firma delle richieste dell'app EBO (16 caratteri). Obbligatoria — non è inclusa nel codice pubblico.
+  region:
+    name: Regione account
+    description: La regione di login del tuo account Enabot (es. GB). Deve corrispondere a quella di registrazione.
+  host:
+    name: Host server account
+    description: L'host del cloud Enabot (es. ebox-eu.enabotserverintl.com). Deve corrispondere alla regione del tuo account.
+  robot_id:
+    name: ID robot
+    description: Gestisci un singolo robot tramite il suo ID, oppure 0 per gestire tutti i robot dell'account.
+  video:
+    name: Consenti video
+    description: >-
+      Permette all'add-on di RICEVERE la telecamera del robot e ri-codificarla (H.265→H.264) perché Home
+      Assistant possa mostrarla. Questa ri-codifica è il PRINCIPALE costo di CPU dell'add-on — è la pipeline
+      più pesante. Lascialo attivo per avere la telecamera; disattivalo per spegnere del tutto il video e
+      liberare risorse.
+  audio:
+    name: Consenti audio (Ascolto)
+    description: >-
+      Permette all'add-on di sottoscrivere il MICROFONO del robot (funzione "ascolto", best-effort). Usa
+      un po' di CPU in più. Disattivalo se non ascolti mai, per risparmiare risorse.
+  talk:
+    name: Consenti Talk
+    description: >-
+      Permette all'add-on di INVIARE la tua voce allo speaker del robot (talk / audio bidirezionale).
+      Abilita la pipeline talk. Attivalo solo se lo usi.
+  video_max_height:
+    name: Altezza max video (px)
+    description: Riduce il video ri-codificato al massimo a questa altezza (es. 720). Più basso = meno CPU e banda. 0 = risoluzione nativa.
+  video_fps:
+    name: FPS video
+    description: Frame rate obiettivo del video ri-codificato. Più basso = meno CPU.
+  video_bitrate:
+    name: Bitrate video (kbps)
+    description: Limita il bitrate del video ri-codificato (0 = illimitato). Più basso = meno banda.
+  video_preset:
+    name: Preset encoder video
+    description: >-
+      Preset velocità/qualità di x264. "ultrafast" è consigliato: i preset più pesanti sono più belli ma
+      troppo lenti da ri-codificare in tempo reale su host tipici e fanno ritardare il video di secondi.
+  audio_codec:
+    name: Codec audio (payload type)
+    description: Il payload type del codec del microfono del robot (8 o 9). Lascia 8 a meno che l'"ascolto" non funzioni.
+  log_level:
+    name: Livello di log
+    description: Verbosità del log dell'add-on. info (default), debug (verboso, per diagnostica), warning (solo problemi).
+  api_token:
+    name: Token API integrazione
+    description: Token generato automaticamente che l'integrazione usa per leggere l'API dell'add-on. Lascialo vuoto.

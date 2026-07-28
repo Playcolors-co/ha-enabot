@@ -1,4 +1,4 @@
-"""Buttons: wake, standby, dock, laser, and driving (forward/back/left/right/stop).
+"""Buttons: wake, standby, dock, and driving (forward/back/left/right/stop). Laser is a switch.
 
 The driving buttons make the robot controllable from any Home Assistant dashboard — i.e. by
 non-admin users too (the add-on panel is admin-only). Each press sends a short, watchdog-limited
@@ -27,10 +27,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             add: AddEntitiesCallback) -> None:
     c = hass.data[DOMAIN][entry.entry_id]
     add([
-        EboButton(c, entry, "wake", "Wake", "wake", "", "mdi:weather-sunny"),
-        EboButton(c, entry, "standby", "Standby", "sleep/set", "on", "mdi:sleep"),
+        # Wake joins the RTC session (camera/set on) — a fresh join is what actually wakes the robot
+        # from standby, like the app; the plain isSleeping opcode does NOT reliably wake it. Standby
+        # leaves the session (connected/set off) so the robot goes back to ZZ. (Laser is a switch now.)
+        EboButton(c, entry, "wake", "Wake", "camera/set", "on", "mdi:weather-sunny"),
+        EboButton(c, entry, "standby", "Standby", "connected/set", "off", "mdi:sleep"),
         EboButton(c, entry, "dock", "Return to base", "dock", "", "mdi:home-import-outline"),
-        EboButton(c, entry, "laser", "Laser", "laser/set", "on", "mdi:laser-pointer"),
         # driving — usable on any dashboard (non-admin friendly)
         EboButton(c, entry, "forward", "Forward", "move/vector", _vec(ly=-_SPEED), "mdi:arrow-up-bold"),
         EboButton(c, entry, "back", "Back", "move/vector", _vec(ly=_SPEED), "mdi:arrow-down-bold"),

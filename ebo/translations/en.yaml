@@ -1,0 +1,61 @@
+configuration:
+  email:
+    name: Enabot account email
+    description: The email of your Enabot (EBO HOME) account.
+  password:
+    name: Enabot account password
+    description: The password of your Enabot account.
+  payload_key:
+    name: App payload key
+    description: The EBO app's AES payload key (16 chars). Required — it is not shipped in the public code.
+  sign_key:
+    name: App sign key
+    description: The EBO app's request-signing key (16 chars). Required — it is not shipped in the public code.
+  region:
+    name: Account region
+    description: Your Enabot account login region (e.g. GB). Match the region you registered with.
+  host:
+    name: Account server host
+    description: Your Enabot cloud server host (e.g. ebox-eu.enabotserverintl.com). Match your account's region.
+  robot_id:
+    name: Robot ID
+    description: Manage a single robot by its ID, or 0 to manage every robot on the account.
+  video:
+    name: Allow video
+    description: >-
+      Lets the add-on RECEIVE the robot's camera and re-encode it (H.265→H.264) so Home Assistant can
+      show it. This re-encoding is the add-on's MAIN CPU cost — it's the heaviest pipeline. Leave ON to
+      have a camera; turn OFF to disable video entirely and free those resources.
+  audio:
+    name: Allow audio (Listen)
+    description: >-
+      Lets the add-on subscribe to the robot's MICROPHONE (the "listen" feature, best-effort). Uses a
+      little extra CPU. Turn OFF if you never listen, to save resources.
+  talk:
+    name: Allow Talk
+    description: >-
+      Lets the add-on SEND your voice to the robot's speaker (talk / two-way audio). Enables the talk
+      pipeline. Turn ON only if you use it.
+  video_max_height:
+    name: Video max height (px)
+    description: Downscale the re-encoded video to at most this height (e.g. 720). Lower = less CPU and bandwidth. 0 = keep the robot's native size.
+  video_fps:
+    name: Video FPS
+    description: Target frame rate for the re-encoded video. Lower = less CPU.
+  video_bitrate:
+    name: Video bitrate (kbps)
+    description: Cap the re-encoded video bitrate (0 = uncapped). Lower = less bandwidth.
+  video_preset:
+    name: Video encoder preset
+    description: >-
+      x264 speed/quality preset. "ultrafast" is recommended: heavier presets look nicer but are too slow
+      to re-encode in real time on typical hosts and make the video lag by seconds.
+  audio_codec:
+    name: Audio codec (payload type)
+    description: The robot microphone's codec payload type (8 or 9). Leave at 8 unless "listen" doesn't work.
+  log_level:
+    name: Log level
+    description: Add-on log verbosity. info (default), debug (chatty, for troubleshooting), warning (only problems).
+  api_token:
+    name: Integration API token
+    description: Auto-generated token the companion integration uses to read the add-on's data API. Leave empty.

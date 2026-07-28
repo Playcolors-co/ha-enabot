@@ -24,14 +24,15 @@ export EBO_PASSWORD="$(jq -r '.password // empty' "$OPTS")"
 export EBO_PAYLOAD_KEY="$(jq -r '.payload_key // empty' "$OPTS")"
 export EBO_SIGN_KEY="$(jq -r '.sign_key // empty' "$OPTS")"
 
-# --- EVERYTHING else (region/host included) lives in a PANEL-managed store (/data/panel.json),
-# NOT in add-on options, so the Configuration tab stays clean. Fallback (first boot / migration):
-# panel.json -> options.json -> built-in default. ---
+# --- account/connection + audio/video processing options all live in the add-on Configuration tab
+# (/data/options.json). The old in-panel Settings (/data/panel.json) is kept only as a one-time
+# migration fallback for users who had set these there. Precedence: options.json -> panel.json ->
+# built-in default. NB: use `has($k)` (not `// empty`) so a `false` boolean isn't dropped. ---
 PANEL_CFG=/data/panel.json
 pget() {  # pget <key> <default>
   local v=""
-  [ -f "$PANEL_CFG" ] && v="$(jq -r --arg k "$1" '.[$k] // empty' "$PANEL_CFG" 2>/dev/null || true)"
-  [ -z "$v" ] && v="$(jq -r --arg k "$1" '.[$k] // empty' "$OPTS" 2>/dev/null || true)"
+  v="$(jq -r --arg k "$1" 'if has($k) then .[$k] else empty end' "$OPTS" 2>/dev/null || true)"
+  [ -z "$v" ] && [ -f "$PANEL_CFG" ] && v="$(jq -r --arg k "$1" 'if has($k) then .[$k] else empty end' "$PANEL_CFG" 2>/dev/null || true)"
   [ -z "$v" ] && v="$2"
   printf '%s' "$v"
 }

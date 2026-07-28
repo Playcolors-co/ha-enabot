@@ -19,8 +19,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                   "video_quality", ["Low", "Medium", "High"], "mdi:high-definition"),
         EboSelect(c, entry, "image_style", "Image style", "image_style/set",
                   "image_style", ["Standard", "Vivid", "Soft"], "mdi:image-filter-vintage"),
+        # Day/night vision = the app's fullscreen day/night button (Auto / Day / Night).
+        EboSelect(c, entry, "night_vision", "Night vision", "night_vision/set",
+                  "night_vision", ["Auto", "Day", "Night"], "mdi:weather-night"),
         EboSelect(c, entry, "eyes", "Eyes", "eyes/set", "eyes",
-                  ["Dynamic", "Clock", "Custom"], "mdi:eye"),
+                  ["Dynamic 1", "Dynamic 2", "Dynamic 3", "Dynamic 4", "Dynamic 5", "Dynamic 6",
+                   "Clock 1", "Clock 2", "Custom"], "mdi:eye"),
+        # Driving mode = the app's fullscreen "Driving Mode" (Smooth / Racing).
+        EboSelect(c, entry, "move_mode", "Driving mode", "move_mode/set",
+                  "move_mode", ["Smooth", "Racing"], "mdi:steering"),
     ])
 
 

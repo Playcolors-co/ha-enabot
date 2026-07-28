@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.26.29"
+version: "0.26.50"
 slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
@@ -10,23 +10,16 @@ arch:
   - amd64
 startup: application
 boot: auto
-# RTSP video (Generic Camera). 8554 = single robot / first robot; 8555-8557 = extra robots
-# when the account has more than one (one RTSP port per robot).
+# Only the ports the OUTSIDE world (your browser) must reach are host-mapped. RTSP (8554…) and HLS
+# (8888…) are NOT here: they're internal — the camera entity reaches RTSP over the Docker network by
+# the add-on's hostname, and the panel plays HLS through the Ingress proxy. Only WebRTC needs the host
+# (the browser connects directly for the fluid drive video), plus the integration data API.
 ports:
-  8554/tcp: 8554
-  8555/tcp: 8555
-  8556/tcp: 8556
-  8557/tcp: 8557
   # data API for the native HA integration (token-guarded)
   8098/tcp: 8098
-  # Low-Latency HLS: the panel's fullscreen 'drive' view plays this for a FLUID preview (one per
-  # robot, 8888 = robot 1). Your browser reaches it directly for smooth low-latency video.
-  8888/tcp: 8888
-  8889/tcp: 8889
-  8890/tcp: 8890
-  8891/tcp: 8891
-  # WebRTC (WHEP) for the panel's fullscreen 'drive' view — TRULY fluid ~200 ms video (one per
-  # robot, 8189 = robot 1). Needs BOTH tcp (WHEP signalling) and udp (ICE media).
+  # WebRTC (WHEP) for the panel's fullscreen 'drive' view — TRULY fluid ~200 ms video. The browser
+  # connects directly here for ICE/media (that's why this one MUST be exposed). One per robot
+  # (8189 = robot 1 … 8192 = robot 4); needs BOTH tcp (signalling) and udp (media).
   8189/tcp: 8189
   8189/udp: 8189
   8190/tcp: 8190
@@ -36,15 +29,7 @@ ports:
   8192/tcp: 8192
   8192/udp: 8192
 ports_description:
-  8554/tcp: "Camera video stream (robot 1) — internal, no need to change"
-  8555/tcp: "Camera video stream (robot 2, if any) — internal"
-  8556/tcp: "Camera video stream (robot 3, if any) — internal"
-  8557/tcp: "Camera video stream (robot 4, if any) — internal"
   8098/tcp: "Data API for the Enabot integration — internal, no need to change"
-  8888/tcp: "Fluid HLS preview (robot 1) for the panel drive view — no need to change"
-  8889/tcp: "Fluid HLS preview (robot 2, if any)"
-  8890/tcp: "Fluid HLS preview (robot 3, if any)"
-  8891/tcp: "Fluid HLS preview (robot 4, if any)"
   8189/tcp: "WebRTC drive video (robot 1) — signalling; no need to change"
   8189/udp: "WebRTC drive video (robot 1) — media/ICE; no need to change"
 # Our base is python:3.11-slim (not an HA base image with s6): disable HA init.
@@ -57,26 +42,53 @@ hassio_api: true
 # into /homeassistant/custom_components/ebo (no HACS needed). Only that folder is touched.
 map:
   - homeassistant_config:rw
-# The Ingress panel edits this add-on's own options (log level, video quality…) and restarts it.
+# manager role: the panel can restart the add-on (after pairing a new robot) and read add-on info.
 hassio_role: manager
 # Sidebar web panel (Zigbee2MQTT-style): manage all robots from one place. Served via Ingress.
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:robot
 panel_title: EBO
-# Only the account login lives here; EVERYTHING else (region, host, video, audio, quality, log
-# level…) is managed from the Enabot panel and stored in /data/panel.json.
+# ALL add-on settings live here (Configuration tab): your account login + connection, and the
+# advanced audio/video processing options. Per-robot settings (video quality, eyes, volume, speed…)
+# are NOT here — you change those on the robot's page in the panel; they're sent to the robot.
 options:
+  # --- account / login ---
   email: ""
   password: ""
   payload_key: ""
   sign_key: ""
+  region: "GB"
+  host: "ebox-eu.enabotserverintl.com"
+  robot_id: 0
+  # --- add-on audio/video processing (advanced — the defaults are good; the drive view auto-tunes) ---
+  video: true
+  audio: true
+  talk: false
+  video_max_height: 720
+  video_fps: 20
+  video_bitrate: 2500
+  video_preset: ultrafast
+  audio_codec: "8"
   log_level: info
 schema:
   email: str
   password: password
   payload_key: password
   sign_key: password
+  # account login region and server host (match your Enabot account); robot_id 0 = all robots
+  region: str
+  host: str
+  robot_id: int
+  # add-on audio/video pipeline (advanced)
+  video: bool
+  audio: bool
+  talk: bool
+  video_max_height: int
+  video_fps: int
+  video_bitrate: int
+  video_preset: list(ultrafast|superfast|veryfast|faster|fast)?
+  audio_codec: list(8|9)?
   # add-on log verbosity: info (default) | debug (chatty) | warning (only problems)
   log_level: list(debug|info|warning)?
   # token the companion integration uses to read this add-on's data API. Auto-generated if empty;

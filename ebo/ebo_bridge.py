@@ -81,7 +81,8 @@ OP_CALL_REC = 103071    # auto-record calls: {"callAutoRecording": int 0/1}
 OP_UPLOAD_CLOUD = 104099  # upload recordings to cloud: {"videoUploadCloud": bool}
 OP_TALKBACK_VOL = 102031  # {"talkbackVolume": int 0..100}
 OP_MOVE_MODE = 103011   # {"moveMode": int}
-OP_SHOOT_MODE = 102035  # {"shootMode": int}  (photo/video)
+OP_NIGHT_MODE = 102035  # {"shootMode": int} — the Air 2's day/night vision mode (0 Auto, 1 Day, 2 Night)
+OP_SHOOT_MODE = OP_NIGHT_MODE  # legacy alias
 OP_PLAY_MOTION = 103005  # {"cycleMode": int, "moveId": int} — preset motion (MOVES)
 OP_PLAY_VOICE = 103007   # {"cycleMode": int, "voiceId": int}
 OP_DOCK = 103043         # manual return-to-base / start charging: {"startUp": bool} (MOVES)
@@ -98,13 +99,42 @@ OP_ROAM = 101061          # {"isRoamOn": bool, "sensitivity": int} — autonomou
 OP_AI_TRACK = 103049      # StartAiTrackData {"mode": int, "trackTarget": int}
 OP_EYES = 104057          # EyesEmojiModeData {"status","mode",...}
 OP_AI_ASK = 103301        # AI chat: {"modelType","session","question","userId"}
+# Motion/Sport settings (the app's fullscreen "Sport settings"). The whole MotionSettings object is
+# sent at once (103023); the current values are requested with 103021 (robot replies 103022, and
+# echoes 103024 after a set). MotionSettings = {status, pickUpCheck, autoDesktopMode, avoidobstacle,
+# steeringSensitivity (0..3), abnormalExerciseReminder}.
+OP_MOTION_GET = 103021
+OP_MOTION_SET = 103023
+RESP_MOTION = 103022
+RESP_MOTION_ECHO = 103024
+# Obstacle avoidance ALSO has a dedicated single-field setter (103045, {"avoidobstacle": bool}) — the
+# app's "Collision Avoidance Assist" toggle. Prefer this over the whole-MotionSettings write: it never
+# clobbers the other bundle fields, and the value is echoed back in the normal settings report, so we
+# can read it too. (The 103023 bundle stays only for steering/pickup/desktop/abnormal, which the robot
+# doesn't report back — those we don't surface yet.)
+OP_AVOID_OBSTACLE = 103045
 
 # value tables (from the app's UI): name shown in HA -> integer sent to the robot
 VIDEO_QUALITY_MAP = {"Low": 1, "Medium": 2, "High": 3}
 IMAGE_STYLE_MAP = {"Standard": 0, "Vivid": 1, "Soft": 2}
-SHOOT_MODE_MAP = {"Normal": 0, "Wide": 1, "Follow": 2}
-MOVE_MODE_MAP = {"Mode 1": 0, "Mode 2": 1, "Mode 3": 2}
-EYES_MODE_MAP = {"Dynamic": 0, "Clock": 1, "Custom": 2}
+# Day/night vision (the app's fullscreen day/night button = shootMode). Confirmed from the app's
+# LiveDayNightLayout: 0 = Auto (autoIv), 1 = Day (dayIv), 2 = Night (nightIv). Echoed in the settings
+# report, so we can read it back.
+NIGHT_MODE_MAP = {"Auto": 0, "Day": 1, "Night": 2}
+# Driving mode = the app's "Driving Mode" radio (Smooth Mode / Racing Mode). moveMode 0/1.
+MOVE_MODE_MAP = {"Smooth": 0, "Racing": 1}
+# steeringSensitivity has 4 levels (0..3) in the app; names are our own (the app's strings are obfuscated)
+STEERING_MAP = {"Low": 0, "Medium": 1, "High": 2, "Max": 3}
+# Eyes/emoji display (opcode 104057). Reconstructed from the Air 2 app: the payload is
+# EyesEmojiModeData {status, mode, dynamicEyes{autoFollow,styleId}, timeEyes{styleId}, customEyes{timeStyle}}.
+# mode 1=Dynamic (styleId 1..6), 2=Clock (styleId 1..2), 3=Custom. The style lists are hardcoded in
+# the app. We expose a single flattened select; each option maps to (mode, styleId).
+EYES_STYLES = {
+    "Dynamic 1": (1, 1), "Dynamic 2": (1, 2), "Dynamic 3": (1, 3),
+    "Dynamic 4": (1, 4), "Dynamic 5": (1, 5), "Dynamic 6": (1, 6),
+    "Clock 1": (2, 1), "Clock 2": (2, 2),
+    "Custom": (3, 1),
+}
 
 
 def _rev(m, v):
@@ -133,6 +163,7 @@ class Bridge:
         self.sid = self.s.get("sid")
         self.telemetry = {}
         self.settings = {}
+        self.motion = {}          # current MotionSettings (obstacle avoidance, steering, etc.)
         self.info = {}
         self._integ_announced = False    # announced this robot to the companion integration?
         self.rtc_state = None
@@ -245,16 +276,19 @@ class Bridge:
             def on_login_result(o, req, err):
                 log("[RTM] login result:", err)
 
-        self.rtm = create_rtm_client(RtmConfig(
-            app_id=s["app_id"], user_id=s["rtm_user"], use_string_user_id=1,
-            presence_timeout=300, heartbeat_interval=5, event_handler=RtmH(),
-        ))
-        r, _ = self.rtm.login(s["rtm_token"])
-        if r != 0:
-            raise RuntimeError("RTM login failed: %s" % self.rtm.get_error_reason(r))
-        self.rtm.subscribe(s["robot_rtm"],
-                           SubscribeOptions(with_message=True, with_presence=True))
-        log("[RTM] login and subscribe ok")
+        if self.rtm is None:      # reuse an existing RTM login (telemetry) across RTC reconnects
+            self.rtm = create_rtm_client(RtmConfig(
+                app_id=s["app_id"], user_id=s["rtm_user"], use_string_user_id=1,
+                presence_timeout=300, heartbeat_interval=5, event_handler=RtmH(),
+            ))
+            r, _ = self.rtm.login(s["rtm_token"])
+            if r != 0:
+                raise RuntimeError("RTM login failed: %s" % self.rtm.get_error_reason(r))
+            self.rtm.subscribe(s["robot_rtm"],
+                               SubscribeOptions(with_message=True, with_presence=True))
+            log("[RTM] login and subscribe ok")
+        else:
+            log("[RTM] reusing existing login")
 
         svc = AgoraService()
         scfg = AgoraServiceConfig()
@@ -787,6 +821,7 @@ class Bridge:
                 self.send(OP_HANDSHAKE, {"userId": self.account})
                 time.sleep(1)
                 self.send(OP_GET_SETTINGS)
+                self.send(OP_MOTION_GET)
                 self.send(OP_GET_ROUTES)
             except Exception as e:
                 log("[!] reconnect failed:", e)
@@ -803,6 +838,9 @@ class Bridge:
                     self.rtc.disconnect()
             except Exception:
                 pass
+            # Full disconnect (known-good standby): also log out RTM so the robot reliably sleeps.
+            # (The 0.26.32 "keep RTM" experiment is deferred to the auto-standby plan — reverted here
+            # so the shipped standby stays reliable until we can verify the RTC-only behaviour.)
             try:
                 if self.rtm:
                     self.rtm.logout()
@@ -811,6 +849,10 @@ class Bridge:
             self.rtm = None
             self.rtc = None
             self._observers_registered = False
+            # Standby stops the video too — reflect it so Home Assistant shows a clear change
+            # (otherwise the camera switch stays "on" and it looks like nothing happened).
+            self.video_on = False
+            self._publish_camera_state()
         self._publish_conn_state()
 
     def _publish_conn_state(self):
@@ -919,6 +961,12 @@ class Bridge:
             # callAutoRecording echoed back?) — helps diagnose read-back gaps.
             log("[settings] %s" % json.dumps(data, sort_keys=True), level="debug")
             self._publish_settings()
+        elif mid in (RESP_MOTION, RESP_MOTION_ECHO):
+            # MotionSettings (obstacle avoidance, steering sensitivity, pickup, desktop mode, …)
+            if isinstance(data, dict):
+                self.motion.update(data)
+            log("[motion] %s" % json.dumps(data, sort_keys=True))
+            self._publish_settings()
         elif mid == OP_INFO:
             self.info = data
             self._publish_telemetry()      # refresh fw/ip/ssid diagnostic sensors
@@ -968,6 +1016,25 @@ class Bridge:
         with self.lock:
             self.vec = {"lx": lx, "ly": ly, "rx": rx, "ry": ry, "buttons": 0}
             self.vec_deadline = time.time() + hold if any((lx, ly, rx, ry)) else 0
+
+    def _set_motion(self, field, value):
+        """Change one MotionSettings field and re-send the WHOLE object (opcode 103023) — the robot
+        expects the full struct. We start from the last values the robot reported (self.motion), or
+        sensible defaults if we haven't read them yet (avoidobstacle is also echoed in the settings
+        blob, so we can seed it from there)."""
+        m = self.motion or {}
+        payload = {
+            "status": 0,
+            "pickUpCheck": bool(m.get("pickUpCheck", False)),
+            "autoDesktopMode": bool(m.get("autoDesktopMode", False)),
+            "avoidobstacle": bool(m.get("avoidobstacle", self.settings.get("avoidobstacle", False))),
+            "steeringSensitivity": int(m.get("steeringSensitivity", 0)),
+            "abnormalExerciseReminder": bool(m.get("abnormalExerciseReminder", False)),
+        }
+        payload[field] = value
+        self.motion.update({k: v for k, v in payload.items() if k != "status"})   # optimistic
+        self.send(OP_MOTION_SET, payload)
+        self._publish_settings()
 
     # ---------------- MQTT / Home Assistant ----------------
 
@@ -1097,9 +1164,11 @@ class Bridge:
                    "wake", "say", "talk", "audio_tx/set", "volume/set", "talkback_volume/set",
                    "sports_record/set", "call_rec/set", "upload_cloud/set", "dock",
                    "patrol/route/set", "patrol/start", "camera/set", "connected/set",
-                   "rotate/set", "video_quality/set", "image_style/set", "shoot_mode/set",
+                   "rotate/set", "video_quality/set", "image_style/set", "night_vision/set",
                    "move_mode/set", "eyes/set", "roaming/set", "ai_track", "motion/set",
-                   "voice/set", "ai_ask"):
+                   "avoid_obstacle/set", "steering/set", "pickup_check/set", "desktop_mode/set",
+                   "abnormal_reminder/set",
+                   "voice/set", "ai_ask", "cmd"):    # "cmd" = raw opcode escape hatch (AI/eyes)
             c.subscribe("%s/%s" % (NODE, _t))
         if not self.expose_mqtt:
             # native-integration mode: skip MQTT entity discovery (the panel/integration still
@@ -1237,17 +1306,23 @@ class Bridge:
             "name": "EBO image style", "command_topic": "%s/image_style/set" % NODE,
             "state_topic": st, "value_template": "{{ value_json.image_style | default('') }}",
             "options": list(IMAGE_STYLE_MAP.keys()), "icon": "mdi:image-filter-vintage"})
-        self._disc("select", "shoot_mode", {
-            "name": "EBO shoot mode", "command_topic": "%s/shoot_mode/set" % NODE,
-            "state_topic": st, "value_template": "{{ value_json.shoot_mode | default('') }}",
-            "options": list(SHOOT_MODE_MAP.keys()), "icon": "mdi:camera-iris"})
+        self._disc("select", "night_vision", {
+            "name": "EBO night vision", "command_topic": "%s/night_vision/set" % NODE,
+            "state_topic": st, "value_template": "{{ value_json.night_vision | default('') }}",
+            "options": list(NIGHT_MODE_MAP.keys()), "icon": "mdi:weather-night"})
         self._disc("select", "move_mode", {
-            "name": "EBO move mode", "command_topic": "%s/move_mode/set" % NODE,
+            "name": "EBO driving mode", "command_topic": "%s/move_mode/set" % NODE,
             "state_topic": st, "value_template": "{{ value_json.move_mode | default('') }}",
-            "options": list(MOVE_MODE_MAP.keys()), "icon": "mdi:cog-transfer"})
+            "options": list(MOVE_MODE_MAP.keys()), "icon": "mdi:steering"})
+        # collision avoidance — real state (the robot echoes avoidobstacle in the settings report)
+        self._disc("switch", "avoid_obstacle", {
+            "name": "EBO collision avoidance", "command_topic": "%s/avoid_obstacle/set" % NODE,
+            "state_topic": st, "value_template": "{{ value_json.avoid_obstacle | default('false') }}",
+            "payload_on": "true", "payload_off": "false", "state_on": "true", "state_off": "false",
+            "icon": "mdi:wall"})
         self._disc("select", "eyes", {
             "name": "EBO eyes", "command_topic": "%s/eyes/set" % NODE,
-            "options": list(EYES_MODE_MAP.keys()), "optimistic": True, "icon": "mdi:eye"})
+            "options": list(EYES_STYLES.keys()), "optimistic": True, "icon": "mdi:eye"})
         # autonomous roaming
         self._disc("switch", "roaming", {
             "name": "EBO roaming", "command_topic": "%s/roaming/set" % NODE,
@@ -1339,8 +1414,8 @@ class Bridge:
         c.subscribe("%s/connected/set" % NODE)
         # extra controls
         for topic in ("rotate/set", "video_quality/set", "image_style/set",
-                      "shoot_mode/set", "move_mode/set", "eyes/set", "roaming/set",
-                      "ai_track", "motion/set", "voice/set", "ai_ask"):
+                      "night_vision/set", "move_mode/set", "avoid_obstacle/set", "eyes/set",
+                      "roaming/set", "ai_track", "motion/set", "voice/set", "ai_ask"):
             c.subscribe("%s/%s" % (NODE, topic))
         self._publish_camera_state()
         self._publish_conn_state()
@@ -1427,12 +1502,31 @@ class Bridge:
                 # robot never echoes this field → reflect intent optimistically
                 self.settings["imageStyle"] = iv
                 self._publish_telemetry()
-            elif topic.endswith("/shoot_mode/set"):
-                self.send(OP_SHOOT_MODE, {"shootMode": SHOOT_MODE_MAP.get(payload, 0)})
+            elif topic.endswith("/night_vision/set"):
+                self.send(OP_NIGHT_MODE, {"shootMode": NIGHT_MODE_MAP.get(payload, 0)})
             elif topic.endswith("/move_mode/set"):
                 self.send(OP_MOVE_MODE, {"moveMode": MOVE_MODE_MAP.get(payload, 0)})
             elif topic.endswith("/eyes/set"):
-                self.send(OP_EYES, {"status": 0, "mode": EYES_MODE_MAP.get(payload, 0)})
+                mode, style = EYES_STYLES.get(payload, (1, 1))
+                self.send(OP_EYES, {
+                    "status": 0, "mode": mode,
+                    "dynamicEyes": {"autoFollow": False, "styleId": style if mode == 1 else 1},
+                    "timeEyes": {"styleId": style if mode == 2 else 1},
+                    "customEyes": {"timeStyle": 0},
+                })
+            elif topic.endswith("/avoid_obstacle/set"):
+                on = payload.lower() in ("on", "true", "1")
+                self.send(OP_AVOID_OBSTACLE, {"avoidobstacle": on})   # direct setter, no bundle clobber
+                self.settings["avoidobstacle"] = on                   # optimistic (settings report confirms)
+                self._publish_settings()
+            elif topic.endswith("/steering/set"):
+                self._set_motion("steeringSensitivity", STEERING_MAP.get(payload, 0))
+            elif topic.endswith("/pickup_check/set"):
+                self._set_motion("pickUpCheck", payload.lower() in ("on", "true", "1"))
+            elif topic.endswith("/desktop_mode/set"):
+                self._set_motion("autoDesktopMode", payload.lower() in ("on", "true", "1"))
+            elif topic.endswith("/abnormal_reminder/set"):
+                self._set_motion("abnormalExerciseReminder", payload.lower() in ("on", "true", "1"))
             elif topic.endswith("/roaming/set"):
                 on = payload.lower() in ("on", "true", "1")
                 self.send(OP_ROAM, {"isRoamOn": on, "sensitivity": 5})
@@ -1484,6 +1578,7 @@ class Bridge:
         sd = t.get("sdcard", {})
         stor = t.get("storage", {})
         se = self.settings
+        mo = self.motion
         info = self.info
 
         def gb(x):
@@ -1505,8 +1600,15 @@ class Bridge:
             # camera / movement settings (current values feed the selects)
             "video_quality": _rev(VIDEO_QUALITY_MAP, se.get("videoQuality")),
             "image_style": _rev(IMAGE_STYLE_MAP, se.get("imageStyle")),
-            "shoot_mode": _rev(SHOOT_MODE_MAP, se.get("shootMode")),
+            "night_vision": _rev(NIGHT_MODE_MAP, se.get("shootMode")),
             "move_mode": _rev(MOVE_MODE_MAP, se.get("moveMode")),
+            # motion / sport settings (MotionSettings, opcode 103022). avoidobstacle is also echoed
+            # in the settings blob, so fall back to it when the MotionSettings read hasn't arrived.
+            "avoid_obstacle": "true" if mo.get("avoidobstacle", se.get("avoidobstacle")) else "false",
+            "steering": _rev(STEERING_MAP, mo.get("steeringSensitivity")),
+            "pickup_check": "true" if mo.get("pickUpCheck") else "false",
+            "desktop_mode": "true" if mo.get("autoDesktopMode") else "false",
+            "abnormal_reminder": "true" if mo.get("abnormalExerciseReminder") else "false",
             # storage
             "sd_present": "true" if sd.get("isPresent") else "false",
             "sd_free": gb(sd.get("availableBytes")),
@@ -1618,6 +1720,7 @@ class Bridge:
         self.send(OP_HANDSHAKE, {"userId": self.account})
         time.sleep(1)
         self.send(OP_GET_SETTINGS)
+        self.send(OP_MOTION_GET)          # fetch obstacle-avoidance / steering / etc.
         self.send(OP_GET_ROUTES)          # populate the patrol-route select
         log("[*] bridge running")
         last_check = time.time()

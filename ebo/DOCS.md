@@ -68,12 +68,18 @@ the **EBO** sidebar entry. From one place you can:
 - click a robot for its **detail page** with quick actions — **Camera on/off, ☀ Wake, 🌙 Standby,
   Laser, Dock** — and per-robot **settings** (video quality, image style, eyes, volume, speed,
   motion recording);
+- drive with a **joystick** (detail page) or a full-screen **dual-stick / joystick** view (choose in
+  the full-screen ⚙, plus Laser / return-to-base / speed there);
 - **➕ Add robot**: pair a NEW cloud robot with a QR code, no phone needed (enter your Wi-Fi → the
   robot scans the QR → it joins and binds to your account);
-- **🗑 Remove from account**: unbind a robot (with confirmation);
-- **⚙ Settings**: all the operational add-on options (region/host, video on/off + quality/fps/
-  bitrate/preset, audio, talk, log level). Saving restarts the add-on. These are stored in the
-  add-on, not in the Configuration tab.
+- **🗑 Remove from account**: unbind a robot (with confirmation).
+
+**Where settings live**
+- **Per-robot** (video quality, image style, eyes, volume, speed, motion rec): on the **robot's
+  detail page** — they're sent to the robot.
+- **Account & add-on** (email/password, region/host, robot id, the advanced audio/video processing
+  options, log level): in the add-on's **Configuration tab** (Settings → Add-ons → EBO →
+  Configuration). The defaults are good — you normally only set your login.
 
 ## Entities & camera — native, no MQTT
 
