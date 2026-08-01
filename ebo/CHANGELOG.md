@@ -1,5 +1,10 @@
 # Changelog — Enabot integration
 
+## 0.26.93 — a short demo clip in the README
+- Added an animated demo of the robot being driven from a phone, next to the feature list, so the
+  project shows what it does in the first two seconds. (Trimmed and optimised to ~3 MB.)
+
+
 ## 0.26.92 — screenshots in the README, and two small UI fixes they revealed
 - The project finally **shows what it looks like**: the README now leads with the driving view, the
   panel and a robot as a Home Assistant device (`ebo/docs/img/`).

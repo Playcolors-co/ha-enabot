@@ -11,12 +11,24 @@ in your automations. No phone app needed.
   <em>Full-screen driving: two sticks, ~200 ms video on your LAN, and two-way audio.</em>
 </p>
 
+<table>
+<tr>
+<td width="47%" align="center">
+  <img src="ebo/docs/img/drive-demo.gif" alt="Driving the EBO robot live from a phone: the dual sticks move it while the video updates in real time" width="300"><br>
+  <em>Driving it from a phone — the badge shows the live WebRTC feed at 720p.</em>
+</td>
+<td width="53%">
+
 | | |
 |---|---|
 | 🎮 **Drive it** | analog joystick or dual sticks, low-latency WebRTC video |
 | 👀 **See it** | a real Home Assistant camera per robot, for dashboards and automations |
 | 🔊 **Hear & talk** | listen through the robot's microphone and speak back from your phone |
 | 🤖 **Automate it** | every control as an entity — plus an optional MCP server for AI agents |
+
+</td>
+</tr>
+</table>
 
 <p align="center">
   <img src="ebo/docs/img/panel-list.png" alt="The EBO sidebar panel listing every robot on the account with a live preview, battery and signal" width="620">
