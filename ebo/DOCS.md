@@ -35,10 +35,35 @@ provide them yourself in the configuration:
 - **`sign_key`** — the HMAC key for the request signature (`x-ebo-sign`).
 - **`payload_key`** — the AES-128-GCM key for the login payload.
 
-They are the same for everyone (app-level constants, not per-user secrets). A technically-inclined
-user can read them from **their own copy of the EBO HOME app** (decompile the APK, or hook
-`javax.crypto.Mac` / the AES cipher with Frida). Without them the add-on stops with a clear
-message. This project does not distribute them.
+They are the same for everyone (app-level constants, not per-user secrets), and you read them from
+**your own copy of the EBO HOME app**. Without them the add-on stops with a clear message.
+
+### How to get them (~10 minutes, once)
+
+1. **Get the APK of the EBO HOME app off your phone** (package `com.enabot.ebox.intl`):
+   - with an extractor app — [App Manager](https://github.com/MuntashirAkon/AppManager/releases)
+     (also on [F-Droid](https://f-droid.org/packages/io.github.muntashirakon.AppManager/)) → find
+     *EBO HOME* → *Export APK*; **or**
+   - over USB with [adb](https://developer.android.com/tools/releases/platform-tools):
+     `adb shell pm path com.enabot.ebox.intl` then `adb pull <the base.apk path> ebo.apk`
+2. **Open it with jadx** — download from
+   [github.com/skylot/jadx/releases](https://github.com/skylot/jadx/releases) (needs Java, e.g.
+   [Adoptium](https://adoptium.net)). GUI: open `ebo.apk`. CLI: `jadx -d ebo-src ebo.apk`.
+3. **Open the class** `com.enabot.lib_ebo.netWork.ServerEncryptHelper`
+   (in jadx-gui: Ctrl/Cmd+Shift+F → search `ServerEncryptHelper`). Near the top it holds **two
+   16-character string constants** (the field names are obfuscated, e.g. `f24161b`):
+   - the one fed to the **AES cipher** for the request body → **`payload_key`**
+   - the one used to build the **`x-ebo-sign` signature** (SHA-256) → **`sign_key`**
+4. **Paste both** into this add-on's Configuration tab. If login fails with a signature error, you
+   probably swapped them — try the other way round.
+
+📖 Full version with more detail:
+<https://github.com/Playcolors-co/ha-enabot/blob/main/ebo/docs/GET-APP-KEYS.md>
+
+Why we don't just bundle them (even encrypted): whatever decrypts them would have to ship with the
+add-on too, so it would protect nothing — and it would mean redistributing someone else's secrets.
+Keeping them user-supplied is both safer and legally cleaner: you use your own app's keys, for your
+own robot. Please don't post the keys publicly.
 
 ## Configuration (only 4 fields)
 

@@ -1,5 +1,17 @@
-ARG BUILD_FROM=docker.io/library/python:3.11-slim
-FROM ${BUILD_FROM}
+# Base image pinned HERE (build.yaml is deprecated — the Supervisor wants build parameters in the
+# Dockerfile). It MUST stay a Debian/glibc Python: the Agora SDK ships glibc .so files and does not
+# run on the Alpine/musl base images. Do NOT switch this to an HA alpine base.
+FROM docker.io/library/python:3.11-slim
+
+# The Supervisor still passes --build-arg BUILD_FROM/BUILD_ARCH/BUILD_VERSION; declare them so the
+# build doesn't warn about unused args. They are intentionally NOT used for the base image.
+ARG BUILD_FROM
+ARG BUILD_ARCH
+ARG BUILD_VERSION
+
+LABEL org.opencontainers.image.title="EBO for Home Assistant (unofficial)" \
+      org.opencontainers.image.source="https://github.com/Playcolors-co/ha-enabot" \
+      org.opencontainers.image.description="Unofficial community add-on for Enabot EBO robots"
 
 # Required tools: jq + curl are used by run.sh (options + Supervisor MQTT). ca-certificates
 # for TLS. Keep this step minimal so an update rebuild rarely fails here.

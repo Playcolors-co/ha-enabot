@@ -1,5 +1,57 @@
 # Changelog — Enabot integration
 
+## 0.26.69 — the key-extraction steps are now IN the add-on documentation
+- 0.26.68 added the guide as a separate file, but Home Assistant's **Documentation** tab can't follow
+  relative links — so it was effectively invisible from inside HA. The **full procedure is now written
+  directly in DOCS.md** (get the APK → open with jadx → read the two constants in
+  `ServerEncryptHelper` → paste), with clickable download links, plus an absolute link to the longer
+  version on GitHub.
+
+
+## 0.26.68 — guide for getting the two app keys
+- Added **[docs/GET-APP-KEYS.md](docs/GET-APP-KEYS.md)**: a step-by-step guide (with download links) to
+  read `payload_key` / `sign_key` from **your own copy** of the EBO HOME app — get the APK off your
+  phone, open it with jadx, read the two constants in `ServerEncryptHelper`, paste them into the
+  Configuration tab. Linked from the README and DOCS.
+- Documented **why the keys aren't bundled** (even encrypted): whatever decrypts them would have to
+  ship too, so it would protect nothing — and it would mean redistributing someone else's secrets.
+  User-supplied keys are safer and cleaner: your own app's keys, for your own robot.
+
+
+## 0.26.67 — drop the deprecated build.yaml (Supervisor housekeeping)
+- The Supervisor now warns that **`build.yaml` is deprecated** ("move build parameters into the
+  Dockerfile"). Removed it: the base image and the image labels are declared **in the Dockerfile**.
+  The base stays a **Debian/glibc Python** on purpose — the Agora SDK ships glibc `.so` files and does
+  not run on the Alpine/musl bases — and a test now enforces that so it can't be changed by accident.
+- Fixed the stale image label (it still said "EBO Air 2" instead of the current add-on name).
+- Fixed two stale tests (a value map renamed back in 0.26.50, and the shipped-files list).
+- NOTE: nothing to do about the *"all_app_configs" folder mapping* rename you may see in other add-ons
+  — this add-on maps `homeassistant_config`, which is unaffected.
+
+
+## 0.26.66 — CRITICAL: the robot no longer stays offline forever after a bridge crash
+- **Fixed a supervisor bug that made a crash permanent.** The entrypoint runs with `set -e`; when the
+  bridge process died (e.g. a segfault inside the Agora SDK), `wait` returned non-zero and **killed the
+  very subshell whose job was to restart it**. The add-on still looked healthy — the container stayed
+  "started" and the panel kept responding — but the robot showed **offline (red dot) forever** and no
+  command reached it until you restarted the add-on by hand.
+- All the supervisor `wait` calls are now failure-tolerant, so a crashing bridge is **restarted** as
+  intended (with the existing back-off and the A/V fallback).
+- Note: this was **not** caused by the MCP server — memory was at 1.8% and the MCP runs in its own
+  process. The crash came from the video/Agora side; what was broken was the recovery.
+
+
+## 0.26.65 — settings no longer get wiped, and the panel works for non-admin users
+- **Fixed: options could be silently reset.** When the add-on persisted its auto-generated `api_token`
+  back to the Supervisor, it sent only the login fields — and the Supervisor **replaces the whole
+  options block**, so everything else (video/audio settings, log level, the new MCP flag…) was wiped.
+  It now merges the token into the **existing** options, so nothing else changes. This is why a
+  toggled setting could appear not to "stick" on a fresh install.
+- **The sidebar panel is now visible to non-admin users** (`panel_admin: false`). Home Assistant hides
+  add-on panels from non-admins by default, but the panel *is* how you drive the robot — so family
+  accounts can use it too. Every request is still authenticated by Ingress as that user.
+
+
 ## 0.26.64 — restore the low-latency remote video (undo an unnecessary downgrade)
 - 0.26.63 fixed the black screen (leftover WebRTC `srcObject`) but ALSO switched off-LAN playback to
   plain HLS on a hunch that proxies/CDNs break Low-Latency HLS. That hunch was wrong — LL-HLS works

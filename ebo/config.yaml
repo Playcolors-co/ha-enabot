@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.26.64"
+version: "0.26.69"
 slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
@@ -52,6 +52,10 @@ ingress: true
 ingress_port: 8099
 panel_icon: mdi:robot
 panel_title: EBO
+# Show the sidebar panel to NON-admin users too (Home Assistant hides add-on panels from
+# non-admins by default). The panel is how you drive the robot, so family members / kids'
+# accounts need it — not just admins. Ingress still authenticates every request as that user.
+panel_admin: false
 # ALL add-on settings live here (Configuration tab): your account login + connection, and the
 # advanced audio/video processing options. Per-robot settings (video quality, eyes, volume, speed…)
 # are NOT here — you change those on the robot's page in the panel; they're sent to the robot.

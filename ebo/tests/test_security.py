@@ -15,7 +15,7 @@ N = "ebo"
 # files that actually get published / shipped in the image
 PUBLISHABLE = [os.path.join(ADDON, f) for f in (
     "ebo_bridge.py", "ebo_cloud.py", "ebo_sign.py", "ebo_video.py", "ebo_log.py",
-    "run.sh", "config.yaml", "build.yaml", "Dockerfile", "CHANGELOG.md",
+    "run.sh", "config.yaml", "Dockerfile", "CHANGELOG.md", "ebo_mcp.py",
     "DOCS.md", "README.md",
 )]
 

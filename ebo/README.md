@@ -19,7 +19,8 @@ It gives you three things:
 ## Setup
 1. In the add-on **Configuration** tab, enter only your **email** and **password** (the Enabot
    account) — plus the two **app crypto keys** (`payload_key` / `sign_key`), which this project
-   does not ship (see DOCS → "App crypto keys"). Everything else is managed from the **panel**.
+   does not ship: read them once from your own copy of the EBO HOME app —
+   **[step-by-step guide with links](https://github.com/Playcolors-co/ha-enabot/blob/main/ebo/docs/GET-APP-KEYS.md)**. Everything else is managed from the **panel**.
 2. Start the add-on, then open the **panel** (the add-on's *Open Web UI* / sidebar entry).
 3. For per-robot **device + live camera** entities, install the companion **Enabot integration**
    from HACS (custom repository `Playcolors-co/ha-enabot-integration`).

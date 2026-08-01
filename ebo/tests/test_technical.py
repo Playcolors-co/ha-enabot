@@ -78,9 +78,14 @@ def test_config_yaml_structure_and_version():
     assert "amd64" in cfg["arch"]      # Agora SDK is amd64-only
 
 
-def test_build_yaml_valid():
-    b = yaml.safe_load(open(os.path.join(ADDON, "build.yaml"), encoding="utf-8"))
-    assert "build_from" in b and "amd64" in b["build_from"]
+def test_base_image_pinned_and_glibc():
+    """build.yaml is deprecated: the base image now lives in the Dockerfile. It MUST stay a
+    Debian/glibc python — the Agora SDK ships glibc .so files and won't run on alpine/musl."""
+    df = open(os.path.join(ADDON, "Dockerfile"), encoding="utf-8").read()
+    froms = [l for l in df.splitlines() if l.strip().upper().startswith("FROM ")]
+    assert froms, "no FROM in the Dockerfile"
+    assert "python:3.11-slim" in froms[0], froms[0]
+    assert all("alpine" not in f.lower() for f in froms)
 
 
 def test_opcodes_are_ints(B_mod):
@@ -89,8 +94,8 @@ def test_opcodes_are_ints(B_mod):
 
 
 def test_value_maps_have_unique_ints(B_mod):
-    for name in ("VIDEO_QUALITY_MAP", "IMAGE_STYLE_MAP", "SHOOT_MODE_MAP",
-                 "MOVE_MODE_MAP", "EYES_MODE_MAP"):
+    for name in ("VIDEO_QUALITY_MAP", "IMAGE_STYLE_MAP", "NIGHT_MODE_MAP",
+                 "MOVE_MODE_MAP", "STEERING_MAP"):
         m = getattr(B_mod, name)
         assert len(set(m.values())) == len(m), "%s has duplicate ints" % name
         assert all(isinstance(v, int) for v in m.values())

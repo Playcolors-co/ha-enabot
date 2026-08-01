@@ -72,9 +72,13 @@ elif [ ! -f /data/api_token ]; then
 fi
 export EBO_API_TOKEN="$(cat /data/api_token 2>/dev/null || echo "${EBO_API_TOKEN:-}")"
 if [ -z "$OPT_TOKEN" ] && [ -n "${SUPERVISOR_TOKEN:-}" ] && [ -n "$EBO_API_TOKEN" ]; then
-  # Merge: send the FULL options (Supervisor replaces the whole block) so we don't wipe the login.
-  MERGED="$(jq -n --arg e "$EBO_EMAIL" --arg p "$EBO_PASSWORD" --arg pk "$EBO_PAYLOAD_KEY" \
-                  --arg sk "$EBO_SIGN_KEY" --arg t "$EBO_API_TOKEN" \
+  # Merge: the Supervisor REPLACES the whole options block, so we must send every existing option
+  # back — otherwise persisting the token would silently wipe the user's other settings (video,
+  # audio, mcp, log_level…). Start from the current options file and only add/override api_token.
+  MERGED="$(jq --arg t "$EBO_API_TOKEN" '{options: (. + {api_token: $t})}' "$OPTS" 2>/dev/null)"
+  # Fallback if the options file can't be read: at least keep the login fields.
+  [ -z "$MERGED" ] && MERGED="$(jq -n --arg e "$EBO_EMAIL" --arg p "$EBO_PASSWORD" \
+                  --arg pk "$EBO_PAYLOAD_KEY" --arg sk "$EBO_SIGN_KEY" --arg t "$EBO_API_TOKEN" \
                   '{options:{email:$e,password:$p,payload_key:$pk,sign_key:$sk,api_token:$t}}')"
   curl -sf -X POST -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" -H "Content-Type: application/json" \
     -d "$MERGED" http://supervisor/addons/self/options >/dev/null 2>&1 \
@@ -228,7 +232,12 @@ run_robot() {
       fi
       exec python /app/ebo_bridge.py
     ) &
-    wait $!; local rc=$?
+    # NOTE: the script runs with `set -e`. A crashing bridge makes `wait` return non-zero, which
+    # would kill THIS supervising subshell — leaving the robot permanently offline while the panel
+    # kept running (the container stays "started", so nothing looks broken). `|| rc=$?` keeps the
+    # supervisor alive so the bridge is actually restarted, which is the whole point of this loop.
+    local rc=0
+    wait $! || rc=$?
     [ "$stopping" -eq 1 ] && break
     local ran=$(( $(date +%s) - start ))
     if [ "$ran" -lt 60 ] && { [ "$rc" -ge 128 ] || [ "$rc" -ne 0 ]; }; then
@@ -241,7 +250,7 @@ run_robot() {
       v=0; a=0; crashes=0
     fi
     echo "[add-on] bridge (${id:-single}) exited (rc=${rc}), restarting in 15s…"
-    sleep 15 & wait $!
+    sleep 15 & wait $! || true
   done
 }
 
@@ -267,4 +276,4 @@ fi
 for i in "${!RIDS[@]}"; do
   run_robot "${RIDS[$i]}" "$i" "${RNAMES[$i]}" &
 done
-wait
+wait || true   # never let a crashing child kill the supervisor under `set -e`
