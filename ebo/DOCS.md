@@ -113,6 +113,34 @@ defaults are already correct, but if the video is **choppy or laggy**, check the
 Rule of thumb: **`ultrafast` preset + `Low`/`Medium` quality = fluid**. If you have a powerful host you
 can raise the quality; if it's still choppy, lower it.
 
+## Video connection: fluid on the LAN, slower from remote (important)
+
+The fullscreen "drive" view has **two ways** to reach the video, and the panel picks automatically. The
+current one is shown in the **top-bar badge** (green **WebRTC** or amber **HLS**), and on the robot page
+a line tells you what you'll get before you open fullscreen:
+
+- **On your home network (LAN) → WebRTC**, ~200 ms latency: **fluid, good for actually driving.** The
+  browser connects directly to the add-on for the media.
+- **From outside your home (mobile data, Nabu Casa, a reverse proxy, your own domain) → HLS**, ~1 s
+  latency: the panel shows an **amber "HLS" badge and a warning** that the video is delayed. It's fine
+  to **watch and command gently**, but **not** for reactive driving.
+
+**Why remote can't be as fluid:** WebRTC's video needs a *direct* connection to the add-on on a UDP
+port, which your home router doesn't expose to the internet (and remote-HA access only proxies HTTP).
+So from remote the add-on falls back to HLS, which rides over the same proxy and always works — just
+with more delay. This is the same reason the official app leans on **Agora's cloud relay** and Reolink
+on **their P2P/relay**: a relay in the middle is what makes remote video fluid.
+
+**Want fluid video from remote too?** Give the WebRTC a relay/tunnel — any of:
+- **VPN into your home** (e.g. **Tailscale**, WireGuard): your phone acts as if it's on the LAN, so the
+  fluid WebRTC just works — no port-forwarding, nothing to host. Simplest for personal use.
+- **A TURN server** (self-hosted `coturn`, or a managed one like Cloudflare's): a public relay both
+  sides reach. Works for any device without a VPN client, but you host it / pay for bandwidth.
+- **Port-forward** the WebRTC UDP port on your router (least recommended — exposes a port, and CGNAT
+  breaks it).
+
+Without any of these, remote stays on the (improved) HLS — perfectly usable to look and steer slowly.
+
 ## Driving from automations / AI
 
 Besides the buttons, publish an analog movement vector:
@@ -138,6 +166,10 @@ should only be used when you can see it.
   — this can't be forced from the server SDK. **Talk** (your audio → robot speaker) works.
 - One control session per account: while the add-on is active, the EBO HOME app on the same
   account may be disconnected, and vice versa.
+- **Routes (teach & repeat) are model-dependent.** They rely on the robot's route/patrol firmware,
+  which the **EBO Air 2 does not have** (its firmware ignores the route commands — the official app
+  hides patrol for the Air 2 too). The panel detects this at runtime and **hides the Routes UI** when
+  the robot doesn't support it; it shows only on models that answer the route query (e.g. SE).
 - Depends on Enabot's cloud API — a change on their side may require an update.
 
 ## Troubleshooting

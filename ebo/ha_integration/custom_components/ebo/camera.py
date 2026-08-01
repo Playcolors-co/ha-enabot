@@ -62,3 +62,15 @@ class EboCamera(Camera):
         """
         robot = (self._coordinator.data or {}).get(self._node) or {}
         return robot.get(CONF_RTSP) or self._rtsp_fallback or None
+
+    async def async_camera_image(
+        self, width: int | None = None, height: int | None = None
+    ) -> bytes | None:
+        """Still image. Pull it from the add-on's snapshot endpoint (reliable) instead of letting
+        HA extract a keyframe from the internal RTSP itself — that default path returns 500 when it
+        can't grab a keyframe in time. Falls back to the default (stream) grab if the add-on can't
+        provide one."""
+        img = await self._coordinator.snapshot(self._node)
+        if img:
+            return img
+        return await super().async_camera_image(width, height)

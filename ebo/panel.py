@@ -42,11 +42,13 @@ API_TOKEN = os.environ.get("EBO_API_TOKEN", "")
 
 # Command suffixes the panel may publish (allow-list). Movement is excluded on purpose.
 ALLOWED_CMDS = {
-    "camera/set", "laser/set", "dock", "sleep/set", "wake", "connected/set", "patrol/start",
+    "camera/set", "laser/set", "dock", "sleep/set", "wake", "connected/set",
     "say", "talk",
     "video_quality/set", "image_style/set", "volume/set", "talkback_volume/set",
     "speed/set", "sports_record/set", "call_rec/set", "eyes/set",
     "move_mode/set", "avoid_obstacle/set", "night_vision/set",
+    "patrol/start", "patrol/stop", "patrol/route/set",
+    "route/record/start", "route/record/stop", "route/save", "route/delete",
     # raw opcode escape hatch for AI/automation (and the eyes protocol): {"id":<op>,"data":{...}}
     "cmd",
 }
@@ -514,6 +516,15 @@ input[type=range]{width:100%}
   gap:10px;padding:10px 14px;color:#fff;font-size:13px;background:linear-gradient(#000a,#0000)}
 .fs-info{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .fs-info .b{background:#0006;padding:3px 8px;border-radius:8px;backdrop-filter:blur(3px)}
+.fs-info .b.rtc{background:rgba(18,184,134,.55);color:#eafff5}
+.fs-info .b.hls{background:rgba(214,138,0,.6);color:#fff5e0}
+.fs-hlswarn{position:absolute;top:50px;left:50%;transform:translateX(-50%);z-index:3;max-width:calc(100% - 24px);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  background:rgba(176,90,0,.85);color:#fff;font-size:11px;padding:3px 12px;border-radius:12px;
+  text-align:center;backdrop-filter:blur(3px);transition:opacity .5s;opacity:1}
+.fs-hlswarn.fade{opacity:0}
+.connhint{font-size:12px;margin-top:5px;color:#8a929a}
+.connhint.hls{color:#c77d00}
 .fs-actions{display:flex;align-items:center;gap:8px}
 .fs-ic{width:46px;height:46px;border-radius:50%;background:#0007;color:#fff;border:0;font-size:19px;cursor:pointer;
   display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
@@ -557,6 +568,14 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
 .tabs{display:flex;gap:6px;margin:0 0 4px;border-bottom:1px solid #0001;padding-bottom:2px}
 .tab{flex:1;border:0;background:transparent;color:#8a929a;font-size:13px;font-weight:600;padding:8px 4px;cursor:pointer;border-bottom:2px solid transparent}
 .tab.on{color:inherit;border-bottom-color:#2b6cff}
+/* routes (teach & repeat) */
+.routes{display:flex;flex-direction:column;gap:8px}
+.rrow{display:flex;align-items:center;gap:8px}
+.rrow .rn{flex:1;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rrow .btn{padding:6px 12px}
+/* fullscreen record button: red + pulsing while recording */
+.fs-ic.rec{background:#c0392b;color:#fff;animation:recpulse 1.2s ease-in-out infinite}
+@keyframes recpulse{0%,100%{opacity:1}50%{opacity:.45}}
 </style></head><body>
 <header>
   <span><span id="title" onclick="goBack()" style="cursor:pointer">🤖 EBO</span>
@@ -569,22 +588,35 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
   <video id="fsvid" autoplay muted playsinline></video>
   <div class="fs-tap" onclick="toggleFsControls()"></div>
   <div class="fs-top" id="fs-top"></div>
+  <div id="fs-hlswarn" class="fs-hlswarn" style="display:none">⚠ HLS — video delayed ~1&nbsp;s, not for reactive driving</div>
   <div id="fs-drive"></div>
 </div>
 
 <dialog id="fsopts"><div class="in">
   <h3>Drive settings</h3>
   <div class="tabs">
-    <button class="tab on" data-tab="set" onclick="fsTab('set')">Settings</button>
+    <button class="tab on" data-tab="drv" onclick="fsTab('drv')">Driving</button>
+    <button class="tab" data-tab="cam" onclick="fsTab('cam')">Camera</button>
+    <button class="tab" data-tab="aud" onclick="fsTab('aud')">Audio</button>
     <button class="tab" data-tab="ctl" onclick="fsTab('ctl')">Controls</button>
-    <button class="tab" data-tab="aux" onclick="fsTab('aux')">Auxiliary</button>
   </div>
-  <div class="tabp" data-tab="set">
+  <div class="tabp" data-tab="drv">
     <label>Driving mode</label>
     <select id="fs-dm" onchange="if(fsNode)cmd(fsNode,'move_mode/set',this.value)">${''}</select>
     <label>Movement speed (<span id="fs-mspd-v">—</span>)</label>
     <input id="fs-mspd" type="range" min="1" max="100" value="50" onchange="if(fsNode)cmd(fsNode,'speed/set',this.value)" oninput="document.getElementById('fs-mspd-v').textContent=this.value">
-    <label>Call volume (<span id="fs-cvol-v">—</span>)</label>
+    <label class="tgl"><span>Collision avoidance</span>
+      <input type="checkbox" id="fs-avoid" onchange="if(fsNode)cmd(fsNode,'avoid_obstacle/set',this.checked?'on':'off')"></label>
+  </div>
+  <div class="tabp" data-tab="cam" style="display:none">
+    <label>Night vision</label>
+    <select id="fs-nv" onchange="if(fsNode)cmd(fsNode,'night_vision/set',this.value)">${''}</select>
+    <label>Video quality</label><select id="fs-vq" onchange="if(fsNode)cmd(fsNode,'video_quality/set',this.value)">${''}</select>
+  </div>
+  <div class="tabp" data-tab="aud" style="display:none">
+    <label>Speaker volume — the robot's own voice &amp; sounds (<span id="fs-svol-v">—</span>)</label>
+    <input id="fs-svol" type="range" min="0" max="100" value="50" onchange="if(fsNode)cmd(fsNode,'volume/set',this.value)" oninput="document.getElementById('fs-svol-v').textContent=this.value">
+    <label>Call volume — your voice through the robot (<span id="fs-cvol-v">—</span>)</label>
     <input id="fs-cvol" type="range" min="0" max="100" value="50" onchange="if(fsNode)cmd(fsNode,'talkback_volume/set',this.value)" oninput="document.getElementById('fs-cvol-v').textContent=this.value">
   </div>
   <div class="tabp" data-tab="ctl" style="display:none">
@@ -603,15 +635,20 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
     </label>
     <label>Joystick sensitivity (<span id="fs-spd-v">60</span>)</label>
     <input id="fs-spd" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value;document.getElementById('fs-spd-v').textContent=this.value">
-    <label>Video quality</label><select id="fs-vq" onchange="if(fsNode)cmd(fsNode,'video_quality/set',this.value)">${''}</select>
-  </div>
-  <div class="tabp" data-tab="aux" style="display:none">
-    <label class="tgl"><span>Collision avoidance</span>
-      <input type="checkbox" id="fs-avoid" onchange="if(fsNode)cmd(fsNode,'avoid_obstacle/set',this.checked?'on':'off')"></label>
-    <div class="note">The Enabot app also shows "Auxiliary View" here — that's an app-only on-screen overlay, not a robot setting, so it isn't included.</div>
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn pri" onclick="document.getElementById('fsopts').close()">Done</button></div>
-  <div class="note">More actions (talk, listen, recording, snapshot, patrol) coming soon.</div>
+  <div class="note">More actions (talk, listen, snapshot) coming soon.</div>
+</div></dialog>
+
+<dialog id="routesave"><div class="in">
+  <h3>Save route</h3>
+  <label>Route name</label>
+  <input id="rs-name" type="text" placeholder="e.g. Living-room loop">
+  <div class="row" style="justify-content:flex-end;margin-top:16px;gap:8px">
+    <button class="btn" onclick="document.getElementById('routesave').close()">Discard</button>
+    <button class="btn pri" onclick="saveRoute()">Save</button>
+  </div>
+  <div class="note">Saves the path you just drove, so you can repeat it later from the robot's Routes list.</div>
 </div></dialog>
 
 <dialog id="add"><div class="in">
@@ -702,6 +739,44 @@ function cycleNight(node){
   updateNightUI(node);
   cmd(node,'night_vision/set', next);
 }
+// --- Routes: teach-and-repeat. The list + replay/delete live in the detail; recording (drive to teach
+// a path) starts from the fullscreen ⏺ button. ---
+function routesHtml(r){
+  const st=r.state||{}, routes=st.routes||[];
+  if(!routes.length) return '<div class="note" style="color:#8a929a">No saved routes yet.</div>';
+  return '<div class="routes">'+routes.map(rt=>{
+    const nm=esc(rt.name).replace(/'/g,"\\'");
+    return `<div class="rrow"><span class="rn">${esc(rt.name)}</span>
+      <button class="btn pri" onclick="replayRoute('${r.node}','${nm}')">▶ Repeat</button>
+      <button class="btn" onclick="delRoute('${r.node}',${rt.id})" title="Delete route">🗑</button></div>`;
+  }).join('')+'</div>';
+}
+function replayRoute(node,name){ cmd(node,'patrol/route/set',name); setTimeout(()=>cmd(node,'patrol/start',''),350); }
+function delRoute(node,id){ if(confirm('Delete this route?')){ cmd(node,'route/delete',''+id); } }
+// recording state (optimistic, like the laser)
+let _recOptim={};
+function recState(node){ const r=ROBOTS.find(x=>x.node===node)||{}, st=r.state||{}, real=(st.route_recording==='true');
+  const o=_recOptim[node];
+  if(o){ if(real===o.val || Date.now()>o.until){ delete _recOptim[node]; return real; } return o.val; }
+  return real; }
+function updateRecUI(node){ const on=recState(node); const b=document.getElementById('fs-rec');
+  if(b){ b.className='fs-ic'+(on?' rec':''); b.title=on?'Stop recording — then name & save':'Record a route (drive to teach a path)'; } }
+function recordRoute(node){
+  if(recState(node)){
+    _recOptim[node]={val:false,until:Date.now()+8000}; updateRecUI(node);
+    cmd(node,'route/record/stop','');
+    setTimeout(()=>openRouteSave(node), 1500);   // give the robot a moment to hand back the path
+  } else {
+    _recOptim[node]={val:true,until:Date.now()+8000}; updateRecUI(node);
+    cmd(node,'route/record/start','');
+  }
+}
+let _rsNode=null;
+function openRouteSave(node){ _rsNode=node; const i=document.getElementById('rs-name'); if(i) i.value='';
+  const d=document.getElementById('routesave'); if(d){ d.showModal(); if(i) i.focus(); } }
+function saveRoute(){ const i=document.getElementById('rs-name'); const name=(i&&i.value.trim())||'';
+  if(_rsNode) cmd(_rsNode,'route/save', name);
+  const d=document.getElementById('routesave'); if(d) d.close(); }
 // Enter detail/drive → camera/set on. Bridge-side this JOINS the Agora RTC channel, which WAKES
 // the robot exactly like opening the app (real viewer present). goBack → connected/set off leaves
 // the channel so the robot goes back to standby (ZZ). No unreliable isSleeping opcode dance.
@@ -714,10 +789,15 @@ function driveNow(n){ SEL=n; render(true); bg(n,'camera/set','on'); setTimeout((
 // a smooth diagonal instead of only the last key winning. A watchdog re-sends while held. ---
 let driveSpeed=60, moveNode=null, moveTimer=null;
 const pressed=new Set();          // currently-held directions (keyboard and/or D-pad)
-function sendVec(node,ly,rx,hold){
+function sendVec(node,ly,rx,hold,buttons){
   fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({node,suffix:'move/vector',payload:JSON.stringify({ly,rx,hold})})}).catch(()=>{});
+    body:JSON.stringify({node,suffix:'move/vector',payload:JSON.stringify({ly,rx,hold,buttons:buttons||0})})}).catch(()=>{});
 }
+// Control scheme flag, exactly like the official app: buttons=1 = dual-stick (independent throttle +
+// steering → the robot keeps TURNING while held); buttons=0 = single joystick (the vector is a heading,
+// so a turn is a one-shot ~heading change). Sending 0 for a dual-stick turn is what made the robot jerk
+// ~90° then go straight. The keyboard/D-pad follows the chosen control type (fsCtrlMode).
+function dualFlag(){ return fsCtrlMode==='dual' ? 1 : 0; }
 function _driveTick(){
   if(!moveNode) return;
   let ly=0, rx=0;
@@ -731,7 +811,7 @@ function _driveTick(){
   // forward+right becomes a smooth forward ARC (each axis ~0.7×speed) instead of a spin.
   const mag=Math.hypot(ly,rx);
   if(mag>1){ ly/=mag; rx/=mag; }
-  sendVec(moveNode, Math.round(ly*driveSpeed), Math.round(rx*driveSpeed), 0.7);
+  sendVec(moveNode, Math.round(ly*driveSpeed), Math.round(rx*driveSpeed), 0.7, dualFlag());
 }
 function startMove(node,dir){       // press a direction — add it to the combined vector
   moveNode=node;
@@ -765,7 +845,7 @@ function initJoysticks(){
     if(j._init) return; j._init=true;
     const knob=j.querySelector('.joy-knob'), node=j.getAttribute('data-node');
     let cx=0,cy=0,R=1,vx=0,vy=0,timer=null;
-    const tick=()=>{ if(vx||vy) sendVec(node, Math.round(vy*driveSpeed), Math.round(vx*driveSpeed), 0.6); };
+    const tick=()=>{ if(vx||vy) sendVec(node, Math.round(vy*driveSpeed), Math.round(vx*driveSpeed), 0.6, 0); };   // single joystick = heading scheme
     const aim=(px,py)=>{ let dx=(px-cx)/R, dy=(py-cy)/R; const m=Math.hypot(dx,dy); if(m>1){dx/=m;dy/=m;}
       vx=dx; vy=dy; knob.style.transform='translate('+(dx*R*0.6)+'px,'+(dy*R*0.6)+'px)'; };
     const down=e=>{ const b=j.getBoundingClientRect(); cx=b.left+b.width/2; cy=b.top+b.height/2; R=b.width/2;
@@ -800,13 +880,14 @@ function fsTop(node){
     <div class="fs-actions">
       <button class="fs-ic ${laserOn?'on':''}" id="fs-laser" onclick="toggleLaser('${node}')" title="Laser">•</button>
       <button class="fs-ic" id="fs-night" onclick="cycleNight('${node}')" title="Day/Night vision">${NV_ICON[st.night_vision]||'🌗'}</button>
+      ${st.routes_supported==='true' ? `<button class="fs-ic ${st.route_recording==='true'?'rec':''}" id="fs-rec" onclick="recordRoute('${node}')" title="Record a route (drive to teach a path)">⏺</button>` : ''}
       <button class="fs-ic" onclick="cmd('${node}','dock','')" title="Return to base">⌂</button>
       <button class="fs-ic" onclick="openFsSettings()" title="Settings">⚙</button>
     </div>`;
 }
 // dual-stick driving: LEFT = forward/back (vertical), RIGHT = turn (horizontal). Both can be held at
 // once (one thumb each) to drive a smooth curve. Sends the combined move/vector at ~8 Hz.
-function _fsDriveTick(){ if(fsNode && (fsDX||fsDY)) sendVec(fsNode, Math.round(fsDY*driveSpeed), Math.round(fsDX*driveSpeed), 0.6); }
+function _fsDriveTick(){ if(fsNode && (fsDX||fsDY)) sendVec(fsNode, Math.round(fsDY*driveSpeed), Math.round(fsDX*driveSpeed), 0.6, 1); }   // dual sticks = continuous-turn scheme
 function initStick(el){
   if(el._init) return; el._init=true;
   const knob=el.querySelector('.joy-knob'), axis=el.getAttribute('data-axis');
@@ -856,23 +937,28 @@ function fsTab(name){
 }
 function openFsSettings(){
   const d=document.getElementById('fsopts'); const r=ROBOTS.find(x=>x.node===fsNode)||{}, st=r.state||{};
-  // Settings tab (mirrors the app's fullscreen menu): driving mode, movement speed, call volume
+  // Driving tab: driving mode, movement speed, collision avoidance
   document.getElementById('fs-dm').innerHTML=opt(DM, st.move_mode);
   document.getElementById('fs-mspd').value=st.speed??50;
   document.getElementById('fs-mspd-v').textContent=st.speed??'—';
+  document.getElementById('fs-avoid').checked = st.avoid_obstacle==='true';
+  // Camera tab: night vision, video quality
+  document.getElementById('fs-nv').innerHTML=opt(NV, st.night_vision);
+  document.getElementById('fs-vq').innerHTML=opt(VQ, st.video_quality);
+  // Audio tab: speaker volume (robot's own voice/sounds) + call volume (your voice through the robot)
+  const sv=st.volume??st.playback_volume;
+  document.getElementById('fs-svol').value=sv??50;
+  document.getElementById('fs-svol-v').textContent=sv??'—';
   document.getElementById('fs-cvol').value=st.talkback_volume??50;
   document.getElementById('fs-cvol-v').textContent=st.talkback_volume??'—';
-  // Controls tab (our joystick config + video)
-  document.getElementById('fs-vq').innerHTML=opt(VQ, st.video_quality);
+  // Controls tab: our joystick config
   document.getElementById('fs-spd-v').textContent=driveSpeed;
   d.querySelector('#fs-spd').value=driveSpeed;
   document.getElementById('fs-ctrl').value=fsCtrlMode;
   document.getElementById('fs-swap').checked=fsDualSwap;
   document.getElementById('fs-joyside').value=fsJoySide;
-  // Auxiliary tab (collision avoidance)
-  document.getElementById('fs-avoid').checked = st.avoid_obstacle==='true';
   syncFsOpts();
-  fsTab('set');
+  fsTab('drv');
   d.showModal();
 }
 let wakeTimer=null;
@@ -888,6 +974,35 @@ function hlsSrc(node){
     return B+'/hlsp/'+port+'/'+path+'/index.m3u8';
   }catch(e){ return ''; }
 }
+// Are we likely OFF the robot's LAN (opened via Nabu Casa remote, a reverse proxy, a public domain,
+// from cellular…)? WebRTC's media needs a DIRECT browser->host:8189/UDP hop, and mediamtx only offers
+// the host's PRIVATE LAN IPs as ICE candidates (no STUN/TURN) — from remote those are unreachable, so
+// WebRTC can never connect and we'd just hang ~15 s before falling back. Heuristic on the panel's own
+// hostname: a private/LAN address (or a bare local name) = same network; anything else = remote. HLS
+// (Ingress-proxied) works either way, so a wrong guess only costs the fluid path, never playback.
+// Connection hint for the detail page: tells you, before you open fullscreen, which video path you'll
+// get — fluid WebRTC on the LAN, or the slower HLS from remote. (Detected from the panel's hostname.)
+function connHint(){
+  return isLikelyRemote()
+    ? '🔗 Remote · video will use <b>HLS</b> (~1&nbsp;s, less fluid). Fluid only on the LAN or with a relay/VPN.'
+    : '🔗 On the LAN · fluid <b>WebRTC</b> video (~200&nbsp;ms)';
+}
+function connHintClass(){ return 'connhint'+(isLikelyRemote()?' hls':''); }
+function isLikelyRemote(){
+  const h=(location.hostname||'').toLowerCase();
+  if(!h||h==='localhost') return false;
+  if(h.startsWith('homeassistant')) return false;                 // homeassistant / homeassistant.local
+  if(/\.(local|lan|internal|home|home\.arpa)$/.test(h)) return false;
+  const m=h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if(m){ const a=+m[1], b=+m[2];                                  // IPv4: RFC1918 / loopback / link-local = LAN
+    if(a===10||a===127||(a===169&&b===254)) return false;
+    if(a===192&&b===168) return false;
+    if(a===172&&b>=16&&b<=31) return false;
+    return true; }                                                // any other IPv4 → remote
+  if(h.indexOf(':')>=0) return !(h==='::1'||/^\[?f[cd]/.test(h)); // IPv6: loopback / ULA (fc/fd) = LAN
+  if(h.indexOf('.')<0) return false;                              // bare single-label host (mDNS/local DNS) → LAN
+  return true;                                                    // FQDN (nabu.casa, duckdns, custom) → remote
+}
 // WebRTC (WHEP): the robot's H.265 is re-encoded to H.264 by the add-on and served by mediamtx as
 // WebRTC. The browser CAN decode H.264 over WebRTC, giving ~200 ms FLUID video — the only path good
 // enough to actually drive. Signalling is proxied through Ingress (same origin); the media flows
@@ -900,9 +1015,23 @@ function _cleanupVid(v){
   try{ v.removeAttribute('src'); v.load(); }catch(e){}
 }
 // video-mode indicator shown in the top bar (WebRTC·fps, or HLS fallback, or connecting)
-function _fsBadge(txt){
+let _hlsWarnTimer=null;
+function _fsBadge(txt, kind){
   const el=document.getElementById('fs-badge2');   // lives inside the top info bar (fsTop)
-  if(el) el.textContent=txt;
+  if(el){ el.textContent=txt; el.className='b'+(kind==='hls'?' hls':(kind==='webrtc'?' rtc':'')); }
+  // Slim one-line "HLS is slower" notice: show briefly, then auto-fade (the amber HLS badge stays as
+  // the persistent indicator). Only re-arm when we (re)enter HLS, not on every stats tick.
+  const w=document.getElementById('fs-hlswarn');
+  if(!w) return;
+  if(kind==='hls'){
+    if(w.dataset.shown!=='1'){                     // first time we go HLS this session
+      w.dataset.shown='1'; w.style.display=''; w.classList.remove('fade');
+      clearTimeout(_hlsWarnTimer);
+      _hlsWarnTimer=setTimeout(()=>{ w.classList.add('fade'); setTimeout(()=>{ w.style.display='none'; },600); }, 5000);
+    }
+  } else {
+    w.style.display='none'; w.classList.remove('fade'); w.dataset.shown='';
+  }
 }
 function _fsWatchStats(v, pc){
   if(v._statTimer) clearInterval(v._statTimer);
@@ -910,7 +1039,7 @@ function _fsWatchStats(v, pc){
     if(v._pc!==pc){ return; }
     try{ const st=await pc.getStats(); let fps=null,w=0;
       st.forEach(s=>{ if(s.type==='inbound-rtp'&&s.kind==='video'){ fps=s.framesPerSecond; w=s.frameWidth||w; } });
-      _fsBadge('WebRTC · '+(fps==null?'…':Math.round(fps))+'fps'+(w?' · '+w+'px':''));
+      _fsBadge('WebRTC · '+(fps==null?'…':Math.round(fps))+'fps'+(w?' · '+w+'px':''), 'webrtc');
     }catch(e){}
   },1000);
 }
@@ -977,7 +1106,18 @@ async function fsPlay(node){
   _cleanupVid(v);
   const gen=(v._gen=(v._gen||0)+1);
   const open=()=>document.getElementById('fs').style.display==='block' && v._gen===gen;
-  _fsStatus('Connessione al robot…');
+  _fsStatus('Connecting to the robot…');
+  // Off-LAN (cellular / remote access): the direct WebRTC UDP path can't be reached and there's no
+  // STUN/TURN, so trying it would only hang before falling back. Go STRAIGHT to the Ingress-proxied
+  // HLS (which works remotely). The status overlay clears once the video actually starts playing;
+  // hls.js self-heals the first few seconds while the robot wakes + publishes its first segment.
+  if(isLikelyRemote()){
+    _fsBadge('HLS · remote', 'hls');
+    console.log('[ebo] off-LAN → HLS diretto (WebRTC saltato)');
+    v.addEventListener('playing',()=>{ if(open()) _fsStatus(null); },{once:true});
+    hlsPlay(node);
+    return;
+  }
   const deadline=Date.now()+20000;   // keep trying while the robot wakes + first frame arrives
   let iceFails=0;
   while(open() && Date.now()<deadline){
@@ -1001,11 +1141,13 @@ async function fsPlay(node){
     if(++iceFails>=2) break;          // answer OK but ICE won't connect → network issue → HLS
     await new Promise(r=>setTimeout(r,600));
   }
-  if(open()){ _fsStatus(null); _fsBadge('HLS (ripiego)'); console.log('[ebo] WHEP unavailable → HLS fallback'); hlsPlay(node); }
+  if(open()){ _fsStatus(null); _fsBadge('HLS · fallback', 'hls'); console.log('[ebo] WHEP unavailable → HLS fallback'); hlsPlay(node); }
 }
 let _driveVQ=null;   // video quality saved on entering drive, restored on exit
 function enterFS(node){
   fsNode=node; fsDX=0; fsDY=0;
+  const hw=document.getElementById('fs-hlswarn');   // re-arm the brief HLS notice for this session
+  if(hw){ hw.dataset.shown=''; hw.style.display='none'; hw.classList.remove('fade'); }
   document.getElementById('fs-top').innerHTML=fsTop(node);
   renderFsControls(node);          // dual sticks or single joystick, per the saved preference
   const v=document.getElementById('fsvid');
@@ -1043,7 +1185,16 @@ function exitFS(){
 // keyboard driving in fullscreen: arrow keys (or WASD) hold-to-move, Esc exits. Multiple keys held
 // at once combine (e.g. Up+Right = forward-right diagonal) — each key adds/removes its own direction.
 const KEYDIR={ArrowUp:'fwd',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right',w:'fwd',s:'back',a:'left',d:'right'};
+// When you're typing in a field (e.g. the "Save route" name box) or ANY modal dialog is open, the
+// keyboard must NOT drive the robot — otherwise 'a'/'w'/'s'/'d' move it instead of typing. (The dialog
+// backdrop blocks clicks on the sticks, but key events still reach the document, hence this guard.)
+function _typingOrDialog(e){
+  const t=e.target, tag=t&&t.tagName;
+  if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable)) return true;
+  return !!document.querySelector('dialog[open]');
+}
 document.addEventListener('keydown',e=>{
+  if(_typingOrDialog(e)) return;                 // typing / a dialog is open → let the keys type, don't drive
   const open=document.getElementById('fs').style.display==='block';
   if(e.key==='Escape'&&open){ exitFS(); return; }
   if(!open) return;
@@ -1052,6 +1203,7 @@ document.addEventListener('keydown',e=>{
   startMove(document.getElementById('fsvid').getAttribute('data-node'),dir);   // auto-repeat ignored inside
 });
 document.addEventListener('keyup',e=>{
+  if(_typingOrDialog(e)) return;
   const dir=KEYDIR[e.key]; if(dir){ e.preventDefault(); stopMove(dir); }
 });
 
@@ -1079,6 +1231,7 @@ function detailView(r){
     ${charging? '<div class="warn">🔌 On the charger — take the robot off the base to drive it.</div>':''}
     <div class="dname"><span id="d-dot" class="dot ${r.online?'on':''}"></span>${esc(r.name||r.node)}</div>
     <div id="d-meta" class="dmeta">${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · 🔋 ${st.battery??'—'}% · 📶 ${st.wifi??'—'}</div>
+    <div id="d-conn" class="${connHintClass()}">${connHint()}</div>
     <div class="row">
       <button id="d-cam" class="btn ${cam?'pri':''}" onclick="cmd('${r.node}','camera/set','${cam?'off':'on'}')">${cam?'Camera ON':'Camera OFF'}</button>
       <button class="btn" onclick="cmd('${r.node}','camera/set','on')">☀ Wake</button>
@@ -1110,15 +1263,19 @@ function detailView(r){
       <label>Eyes</label><select onchange="cmd('${r.node}','eyes/set',this.value)">${opt(EY,st.eyes)}</select>
     </div>
     <div class="sec"><h4>Audio</h4>
-      <label>Volume — speaker (${st.volume??st.playback_volume??'—'})</label>
+      <label>Speaker volume — the robot's own voice &amp; sounds (${st.volume??st.playback_volume??'—'})</label>
       <input type="range" min="0" max="100" value="${st.volume??st.playback_volume??50}" onchange="cmd('${r.node}','volume/set',this.value)">
-      <label>Call volume — two-way talk (${st.talkback_volume??'—'})</label>
+      <label>Call volume — your voice through the robot, two-way talk (${st.talkback_volume??'—'})</label>
       <input type="range" min="0" max="100" value="${st.talkback_volume??50}" onchange="cmd('${r.node}','talkback_volume/set',this.value)">
     </div>
     <div class="sec"><h4>Recording</h4>
-      <label class="tgl"><span>Motion recording</span>
+      <label class="tgl"><span>Motion recording — logs the robot's activity (not a path)</span>
         <input type="checkbox" ${st.sports_record==='true'?'checked':''} onchange="cmd('${r.node}','sports_record/set',this.checked?'on':'off')"></label>
     </div>
+    ${st.routes_supported==='true' ? `<div class="sec"><h4>Routes — teach &amp; repeat</h4>
+      <div id="d-routes">${routesHtml(r)}</div>
+      <div class="note" style="font-size:11px;color:#8a929a;margin-top:8px">Record a new route from the ⛶ fullscreen view: tap ⏺ to start, drive the path, tap ⏺ again to stop, then name &amp; save it. Repeat any saved route here.</div>
+    </div>` : ''}
     <div class="row" style="margin-top:14px"><button class="btn danger" onclick="removeRobot('${r.node}')">🗑 Remove from account</button></div>
   </div>`;
 }
@@ -1143,6 +1300,8 @@ function updateValues(){
     const cb=document.getElementById('d-cam'); if(cb){ cb.className='btn '+(cam?'pri':''); cb.textContent=cam?'Camera ON':'Camera OFF'; cb.setAttribute('onclick',`cmd('${r.node}','camera/set','${cam?'off':'on'}')`); }
     updateLaserUI(SEL);                                    // keep the laser toggle (detail + fullscreen) in sync
     updateNightUI(SEL);                                    // keep the day/night button icon in sync
+    updateRecUI(SEL);                                      // keep the route-record button in sync
+    const rc=document.getElementById('d-routes'); if(rc) rc.innerHTML=routesHtml(r);   // live routes list
     if(document.getElementById('fs').style.display==='block'){   // fullscreen open: refresh its top-bar info
       const fb=document.getElementById('fs-bat'); if(fb) fb.textContent='🔋 '+(st.battery??'—')+'%';
       const fw=document.getElementById('fs-wifi'); if(fw) fw.textContent='📶 '+(st.wifi??'—');

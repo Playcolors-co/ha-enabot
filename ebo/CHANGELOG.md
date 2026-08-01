@@ -1,5 +1,107 @@
 # Changelog — Enabot integration
 
+## 0.26.60 — reliable camera.ebo snapshots (fixes intermittent 500)
+- `camera.ebo` still images no longer depend on Home Assistant extracting a keyframe from the internal
+  RTSP itself — that default path returns **500** when it can't grab a frame in time (seen by tooling /
+  automations that pull the snapshot). The camera now fetches the JPEG from the **add-on's own reliable
+  snapshot endpoint** (the same one the panel previews use, grabbed from the local mediamtx), and falls
+  back to the stream grab if the add-on can't provide one. Live streaming (WebRTC/HLS) is unchanged.
+- NOTE: because this changes integration code, it takes effect after an **HA core restart**.
+
+
+## 0.26.59 — slimmer, auto-dismissing HLS notice
+- The HLS "video is delayed" warning was a big multi-line box covering the view. It's now a **slim
+  one-line pill** that **auto-fades after ~5 s** (the amber **HLS** badge stays as the persistent
+  indicator). It re-appears briefly each time you enter fullscreen on HLS.
+
+
+## 0.26.58 — REVERT the HLS "improvement" (it broke HLS loading)
+- The 0.26.55 remote-HLS tuning was a **regression**: mediamtx `hlsSegmentCount: 3` (a ~3 s playlist)
+  together with hls.js `liveMaxLatencyDuration: 4` is an invalid combo — hls.js won't start when the
+  max-latency exceeds the playlist window, so the remote video hung on "connecting". Reverted both to
+  the known-good 0.26.54 values (`hlsSegmentCount: 7`, plain `lowLatencyMode` player). Remote HLS loads
+  again. (A safer latency tune can come later, with the window sized to match.)
+
+
+## 0.26.57 — Routes hidden on robots that don't support them (e.g. Air 2)
+- **Routes (teach & repeat)** needs the robot's route/patrol firmware. The **EBO Air 2 doesn't have
+  it** — its firmware silently ignores the route/patrol commands (the official app hides patrol for the
+  Air 2 for the same reason). Verified live: the robot never answers the route query, the record
+  start/stop, or returns a recorded path.
+- The panel now **detects route support at runtime** (whether the robot answers the route query) and
+  **hides the Routes section + the ⏺ record button** when unsupported — no more silently-failing UI.
+  On models that do support it (e.g. SE) the Routes UI appears exactly as before.
+
+
+## 0.26.56 — English-only UI strings + debug off
+- All panel strings are now **English** (the add-on is English-only): the connection badge/warning, the
+  "Connecting to the robot…" overlay and the detail connection hint were showing Italian.
+- Turned off debug logging that had been left on for diagnostics — it was starving the video encoder,
+  which left the remote HLS stuck on "connecting".
+
+
+## 0.26.55 — keyboard-in-dialog fix, connection badge, better remote HLS
+- **Fixed: keyboard drove the robot while typing.** When the "Save route" name box (or any dialog) was
+  open, pressing `a`/`w`/`s`/`d`/arrows moved the robot instead of typing (the `a` key sits right over
+  the drive stick). The keyboard now ignores driving keys while you're in a text field or a dialog is open.
+- **Connection badge + warning.** The fullscreen top bar shows a **green "WebRTC"** (fluid ~200 ms) or
+  **amber "HLS"** badge; on HLS a banner warns the video is delayed (~1 s) — fine to watch/steer gently,
+  not for reactive driving. The robot page also shows, before you open fullscreen, whether you'll get
+  fluid LAN WebRTC or remote HLS.
+- **Better remote HLS.** The player now hugs the live edge (catch-up playback), and mediamtx keeps a
+  shorter playlist → less lag on the remote/fallback path. **LAN WebRTC is untouched.**
+- **Docs:** new "Video connection: LAN vs remote" section explaining why remote is slower and the
+  relay/VPN (Tailscale/TURN) options for fluid remote video.
+
+
+## 0.26.54 — fullscreen works from cellular / remote (instant HLS instead of a WebRTC hang)
+- **Fixed the fullscreen "drive" view failing when you're not on the robot's LAN** (mobile data, Nabu
+  Casa remote, a reverse proxy). The fluid path is **WebRTC**, whose media needs a *direct*
+  browser→host:8189/UDP hop; mediamtx only advertises the host's **private LAN IPs** as ICE candidates
+  and there's no STUN/TURN, so from remote WebRTC can never connect — it just hung ~15 s on
+  "Connessione al robot…" before (maybe) falling back.
+- Now the panel **detects when it's opened from off-LAN** (from `location.hostname`) and plays the
+  **Ingress-proxied HLS straight away**, skipping the doomed WebRTC attempt. The badge shows
+  **"HLS (remoto)"** and the video starts in ~1-2 s instead of hanging. On the LAN nothing changes:
+  WebRTC is still tried first for the ~200 ms fluid drive video, with HLS as fallback.
+- NOTE: remote video is the ~1 s HLS, not the 200 ms WebRTC — good enough to watch/steer gently, but
+  the truly-fluid drive path stays LAN-only unless a STUN/TURN server is added later.
+
+## 0.26.53 — Routes: teach & repeat (record a path, replay it)
+- New **Routes** feature, reverse-engineered from the app (the Air 2 firmware supports it even though
+  the current app hides it): **drive to teach a path, then have the robot repeat it.**
+  - **Record** from the fullscreen ⛶ view: the ⏺ button starts recording (opcode 103201), you drive the
+    path, tap ⏺ again to stop (103205); the robot hands back the recorded route (103206) and you give it
+    a name to save (104003).
+  - **Repeat / delete** any saved route from the robot detail's **Routes** section (patrol 103061 /
+    delete 104005). Routes list comes from the robot (104001/104002).
+  - Clarified that **"Motion recording"** is an activity log, *not* a path recorder.
+- NOTE: recording video *during* a replay isn't in this build — the robot has no manual "record video"
+  command, so that has to be done add-on-side (capturing the stream to a file); it's the next step.
+- This is built to the app's protocol but the record/replay path **moves the robot**, so it needs live
+  testing on a real robot.
+
+## 0.26.52 — dual-stick turns continuously (matches the official app)
+- **Fixed steering**: holding the dual-stick to turn now makes the robot **keep turning**, instead of
+  jerking ~90° and then going straight. The move command (opcode 101007) carries a `buttons` flag that
+  the official app uses as the control scheme — **1 = dual-stick** (independent throttle + steering →
+  continuous turn), **0 = single joystick** (the vector is a heading). We were always sending 0, so the
+  robot treated the dual-stick like a single joystick. Now the panel sends the right scheme per control:
+  - **dual sticks → 1** (continuous turn, like the app's 双摇杆 mode)
+  - **single joystick** (detail + fullscreen) **→ 0** (heading, like the app's 单摇杆 mode)
+  - **keyboard / D-pad → follows the chosen control type** (dual or single), so it behaves consistently
+    with whatever you drive with.
+
+## 0.26.51 — settings grouped by function + clearer audio labels
+- **Fullscreen ⚙ menu** re-tabbed to match the detail, grouped by function: **Driving** (mode · speed ·
+  collision avoidance) · **Camera** (night vision · video quality) · **Audio** (speaker + call volume) ·
+  **Controls** (joystick config). Consistent with the robot detail's sections.
+- **Clearer audio labels** everywhere, so the two volumes aren't confusing:
+  - **Speaker volume** — the robot's own voice & sounds (`playbackVolume`).
+  - **Call volume** — your voice through the robot, two-way talk (`talkbackVolume`).
+- **Fixed** the speaker-volume showing "—": the robot does report `playbackVolume`, it just wasn't
+  published to the state. Now it shows the real value.
+
 ## 0.26.50 — day/night vision
 - Added **day/night vision** control, matching the app's fullscreen day/night button. Three modes:
   **Auto / Day / Night** (the Air 2's `shootMode`, opcode 102035; confirmed 0=Auto, 1=Day, 2=Night

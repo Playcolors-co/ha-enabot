@@ -87,8 +87,18 @@ OP_PLAY_MOTION = 103005  # {"cycleMode": int, "moveId": int} — preset motion (
 OP_PLAY_VOICE = 103007   # {"cycleMode": int, "voiceId": int}
 OP_DOCK = 103043         # manual return-to-base / start charging: {"startUp": bool} (MOVES)
 OP_PATROL = 103061       # start patrol: {"mode","trackTarget","routeId","voiceId"} (MOVES)
+OP_PATROL_STOP = 103063  # stop the running patrol (no payload)
 OP_GET_ROUTES = 104001   # ask the robot for the saved patrol routes
 RESP_ROUTES = 104002     # robot's reply: {"status", "list":[{id, routeName, routeFile}]}
+# Route recording = "teach-by-driving": start recording, DRIVE the robot (move commands trace the
+# path), stop, then save with a name. Confirmed from the app (Air2LiveModel + RouteViewModel):
+OP_ROUTE_REC_START = 103201   # start recording a route (no payload); robot acks with 103202
+RESP_ROUTE_REC_ACK = 103202   # {"status": int} — recording started
+RESP_ROUTE_PROGRESS = 103204  # RouteReportInfo streamed while recording (progress)
+OP_ROUTE_REC_STOP = 103205    # stop recording; robot replies 103206 with the recorded route
+RESP_ROUTE_DATA = 103206      # RouteDataInfo {status, routeFile, routeName, tempId, ...} to save
+OP_ROUTE_SAVE = 104003        # save the recorded route (RouteDataInfo with a routeName)
+OP_ROUTE_DELETE = 104005      # {"ids": [int, ...]} — delete saved routes
 
 # --- extra controls mapped from the decompiled command builder (docs/COMMANDS-APK.md) ---
 OP_ROTATE = 103001        # {"angle": int} — rotate the head/body by an angle
@@ -169,6 +179,13 @@ class Bridge:
         self.rtc_state = None
         self.routes = []                 # [(routeName, id)] from the robot
         self.patrol_choice = PATROL_AUTO  # currently selected patrol route
+        self._route_rec = False          # True while recording a route (teach-by-driving)
+        self._route_pending = None       # RouteDataInfo from 103206, awaiting a name + save
+        # Route/patrol support is model-dependent: the EBO Air 2 firmware ignores these opcodes (the
+        # official app hides patrol for it). We probe with 104001 (get routes) on connect: a reply
+        # (104002) means supported; silence past a timeout means unsupported → the panel hides the UI.
+        self._routes_supported = None    # None=unknown, True/False once decided
+        self._routes_query_ts = 0.0      # when we first asked for routes
 
         # current movement vector + watchdog
         self.vec = {"lx": 0, "ly": 0, "rx": 0, "ry": 0, "buttons": 0}
@@ -980,11 +997,28 @@ class Bridge:
                 except Exception as e:
                     log("[discovery] re-announce failed:", e)
         elif mid == RESP_ROUTES:
+            self._routes_supported = True     # the robot answered → route/patrol works on this model
             lst = data.get("list") or []
             self.routes = [(r.get("routeName") or ("route %s" % r.get("id")),
                             r.get("id")) for r in lst if r.get("id") is not None]
             log("[patrol] %d route(s) from the robot" % len(self.routes))
             self._publish_patrol_select()
+            self._publish_settings()          # refresh the panel's routes list
+        elif mid == RESP_ROUTE_REC_ACK:
+            self._route_rec = (data.get("status", 0) == 0)
+            log("[route] recording %s" % ("started" if self._route_rec else "start failed"))
+            self._publish_settings()
+        elif mid == RESP_ROUTE_PROGRESS:
+            log("[route] progress %s" % json.dumps(data, separators=(",", ":")), level="debug")
+        elif mid == RESP_ROUTE_DATA:
+            # recording stopped: the robot hands back the recorded route to save (routeFile + tempId)
+            if data.get("status", 0) == 0:
+                self._route_pending = data
+                self._route_rec = False
+                log("[route] recorded, ready to save (tempId=%s)" % data.get("tempId"))
+                self._publish_settings()
+            else:
+                log("[route] recording ended with status %s" % data.get("status"))
 
     # ---------------- control loop ----------------
 
@@ -1000,7 +1034,8 @@ class Bridge:
             with self.lock:
                 # watchdog: if the command expired, zero it (dead-man's switch)
                 if self.vec_deadline and now > self.vec_deadline:
-                    self.vec = {"lx": 0, "ly": 0, "rx": 0, "ry": 0, "buttons": 0}
+                    self.vec = {"lx": 0, "ly": 0, "rx": 0, "ry": 0,
+                                "buttons": self.vec.get("buttons", 0)}   # keep scheme on the stop frame
                     self.vec_deadline = 0.0
                 v = dict(self.vec)
                 moving = any(v[k] for k in ("lx", "ly", "rx", "ry"))
@@ -1012,9 +1047,11 @@ class Bridge:
                 was_moving = False
             time.sleep(0.1)
 
-    def set_move(self, lx=0, ly=0, rx=0, ry=0, hold=0.6):
+    def set_move(self, lx=0, ly=0, rx=0, ry=0, hold=0.6, buttons=0):
+        # buttons = the control scheme the robot should use (1 = dual-stick: independent throttle + a
+        # CONTINUOUS turn; 0 = single joystick: the vector is a heading). The panel picks it per control.
         with self.lock:
-            self.vec = {"lx": lx, "ly": ly, "rx": rx, "ry": ry, "buttons": 0}
+            self.vec = {"lx": lx, "ly": ly, "rx": rx, "ry": ry, "buttons": int(buttons)}
             self.vec_deadline = time.time() + hold if any((lx, ly, rx, ry)) else 0
 
     def _set_motion(self, field, value):
@@ -1163,7 +1200,8 @@ class Bridge:
         for _t in ("laser/set", "speed/set", "move/+", "move/vector", "joystick", "sleep/set",
                    "wake", "say", "talk", "audio_tx/set", "volume/set", "talkback_volume/set",
                    "sports_record/set", "call_rec/set", "upload_cloud/set", "dock",
-                   "patrol/route/set", "patrol/start", "camera/set", "connected/set",
+                   "patrol/route/set", "patrol/start", "patrol/stop", "camera/set", "connected/set",
+                   "route/record/start", "route/record/stop", "route/save", "route/delete",
                    "rotate/set", "video_quality/set", "image_style/set", "night_vision/set",
                    "move_mode/set", "eyes/set", "roaming/set", "ai_track", "motion/set",
                    "avoid_obstacle/set", "steering/set", "pickup_check/set", "desktop_mode/set",
@@ -1410,6 +1448,9 @@ class Bridge:
         c.subscribe("%s/dock" % NODE)
         c.subscribe("%s/patrol/route/set" % NODE)
         c.subscribe("%s/patrol/start" % NODE)
+        c.subscribe("%s/patrol/stop" % NODE)
+        for _rt in ("route/record/start", "route/record/stop", "route/save", "route/delete"):
+            c.subscribe("%s/%s" % (NODE, _rt))
         c.subscribe("%s/camera/set" % NODE)
         c.subscribe("%s/connected/set" % NODE)
         # extra controls
@@ -1434,7 +1475,7 @@ class Bridge:
             elif topic.endswith("/move/vector"):
                 v = json.loads(payload)
                 self.set_move(v.get("lx", 0), v.get("ly", 0), v.get("rx", 0),
-                              v.get("ry", 0), v.get("hold", 0.6))
+                              v.get("ry", 0), v.get("hold", 0.6), v.get("buttons", 0))
             elif topic.endswith("/sleep/set"):
                 self.send(OP_SLEEP, {"isSleeping": payload.lower() in ("on", "true", "1")})
             elif topic.endswith("/wake"):
@@ -1488,6 +1529,44 @@ class Bridge:
                 self.mqtt.publish("%s/patrol/route" % NODE, payload, retain=True)
             elif topic.endswith("/patrol/start"):
                 self._start_patrol()
+            elif topic.endswith("/patrol/stop"):
+                self.send(OP_PATROL_STOP)
+                log("[patrol] stop")
+            elif topic.endswith("/route/record/start"):
+                self._route_pending = None
+                self.send(OP_ROUTE_REC_START)     # start tracing; drive to teach the path
+                self._route_rec = True
+                log("[route] record start")
+                self._publish_settings()
+            elif topic.endswith("/route/record/stop"):
+                self.send(OP_ROUTE_REC_STOP)      # robot replies 103206 with the recorded route
+                self._route_rec = False
+                log("[route] record stop")
+                self._publish_settings()
+            elif topic.endswith("/route/save"):
+                # payload = the name to give the just-recorded route
+                if not self._route_pending:
+                    log("[route] nothing recorded to save")
+                else:
+                    p = dict(self._route_pending)
+                    p["routeName"] = payload or ("route %d" % (len(self.routes) + 1))
+                    p.setdefault("status", 0)
+                    self.send(OP_ROUTE_SAVE, p)
+                    log("[route] save '%s' (tempId=%s)" % (p["routeName"], p.get("tempId")))
+                    self._route_pending = None
+                    self.send(OP_GET_ROUTES)      # refresh the list
+                    self._publish_settings()
+            elif topic.endswith("/route/delete"):
+                # payload = route id (or name) to delete
+                rid = None
+                try:
+                    rid = int(payload)
+                except (TypeError, ValueError):
+                    rid = dict(self.routes).get(payload)
+                if rid is not None:
+                    self.send(OP_ROUTE_DELETE, {"ids": [int(rid)]})
+                    log("[route] delete id=%s" % rid)
+                    self.send(OP_GET_ROUTES)
             elif topic.endswith("/camera/set"):
                 self.set_camera(payload.lower() in ("on", "true", "1"))
             elif topic.endswith("/connected/set"):
@@ -1591,12 +1670,23 @@ class Bridge:
             "battery": b.get("percentage"),
             "charging": "true" if b.get("chargeStatus") else "false",
             "wifi": t.get("wifiStrength"),
+            "volume": se.get("playbackVolume"),   # speaker volume (robot's own voice/sounds) — was missing
             "recording": "true" if stt.get("isVideoRecording") else "false",
             "laser": "true" if stt.get("laserStatus") else "false",
             "speed": se.get("moveSpeed"),
             "talkback_volume": se.get("talkbackVolume"),
             "sports_record": "true" if se.get("sportsRecord") else "false",
             "call_rec": "true" if se.get("callAutoRecording") else "false",
+            # routes / patrol (teach-and-repeat): the saved routes, plus recording state.
+            # routes_supported: the panel shows the Routes UI only when the robot actually answers the
+            # route query — the Air 2 firmware ignores route/patrol, so it stays hidden there.
+            "routes_supported": ("true" if self._routes_supported
+                                 else ("false" if (self._routes_query_ts
+                                                   and time.time() - self._routes_query_ts > 15)
+                                       else "unknown")),
+            "routes": [{"id": rid, "name": name} for (name, rid) in self.routes],
+            "route_recording": "true" if self._route_rec else "false",
+            "route_pending": "true" if self._route_pending else "false",
             # camera / movement settings (current values feed the selects)
             "video_quality": _rev(VIDEO_QUALITY_MAP, se.get("videoQuality")),
             "image_style": _rev(IMAGE_STYLE_MAP, se.get("imageStyle")),
@@ -1721,7 +1811,9 @@ class Bridge:
         time.sleep(1)
         self.send(OP_GET_SETTINGS)
         self.send(OP_MOTION_GET)          # fetch obstacle-avoidance / steering / etc.
-        self.send(OP_GET_ROUTES)          # populate the patrol-route select
+        self.send(OP_GET_ROUTES)          # populate the patrol-route select (+ probe route support)
+        if not self._routes_query_ts:
+            self._routes_query_ts = time.time()
         log("[*] bridge running")
         last_check = time.time()
         try:

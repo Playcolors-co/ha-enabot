@@ -37,6 +37,24 @@ class EboCoordinator(DataUpdateCoordinator):
             raise UpdateFailed("add-on API unreachable: %s" % err) from err
         return {x.get("node"): x for x in data if x.get("node")}
 
+    async def snapshot(self, node: str) -> bytes | None:
+        """Fetch a still JPEG from the add-on (the same reliable snapshot the panel uses).
+        This avoids HA having to open the internal RTSP itself for a still — that path is flaky
+        and returns 500 when it can't grab a keyframe in time."""
+        if not self._api:
+            return None
+        try:
+            async with async_timeout.timeout(10):
+                async with self._session.get(
+                    self._api + "/api/snapshot", params={"node": node},
+                    headers=self._headers) as r:
+                    if r.status != 200:
+                        return None
+                    return await r.read()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("EBO snapshot %s failed: %s", node, err)
+            return None
+
     async def cmd(self, node: str, suffix: str, payload="") -> None:
         """Send a command to a robot via the add-on API."""
         try:
