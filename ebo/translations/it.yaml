@@ -60,6 +60,10 @@ configuration:
       Avvia un server MCP con cui gli assistenti AI possono controllare il robot vedendo dalla telecamera
       (guarda → decidi → muovi), protetto dal token API di questo add-on. DISATTIVO di default — da
       spento non gira nulla e non consuma risorse. Attivalo solo se colleghi davvero un agente AI.
+  standby_after_minutes:
+    name: Fai dormire il robot dopo (minuti)
+    description: >-
+      Minuti senza comandi dopo i quali l'add-on lascia la sessione del robot, così il robot si addormenta (occhi ZZ) esattamente come quando chiudi l'app ufficiale. Qualsiasi comando — o l'apertura della telecamera / della guida — lo risveglia. Metti 0 per tenerlo sempre sveglio finché l'add-on è attivo (sorveglianza continua).
   log_level:
     name: Livello di log
     description: Verbosità del log dell'add-on. info (default), debug (verboso, per diagnostica), warning (solo problemi).

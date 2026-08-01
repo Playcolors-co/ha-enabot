@@ -59,6 +59,10 @@ configuration:
       Starts an MCP server so AI assistants can control the robot with the camera in the loop (look →
       decide → move), protected by this add-on's API token. OFF by default — when off, nothing runs and
       it costs no resources. Only turn it on if you actually connect an AI agent.
+  standby_after_minutes:
+    name: Let the robot sleep after (minutes)
+    description: >-
+      Minutes without any command after which the add-on leaves the robot's session, so the robot falls asleep (the ZZ eyes) just like when you close the official app. Any command — or opening the camera / drive view — wakes it again. Set 0 to keep it awake for as long as the add-on runs (constant surveillance).
   log_level:
     name: Log level
     description: Add-on log verbosity. info (default), debug (chatty, for troubleshooting), warning (only problems).

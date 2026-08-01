@@ -1,5 +1,109 @@
 # Changelog — Enabot integration
 
+## 0.26.79 — the sharper drive video now actually kicks in (fix for 0.26.78)
+- 0.26.78 chose the quality from the **URL** (the "are we remote?" guess). If you open Home Assistant
+  through your own domain — even while sitting on the same LAN — that guess says "remote", so it kept
+  forcing **Low** and the badge still read `848px`. Wrong signal.
+- Now it uses the **transport that actually connects**: when **WebRTC** comes up, the browser is
+  talking to the add-on directly, so the robot is switched to **High** (~720p) and that fact is
+  remembered — from then on High is requested *before* connecting, with no mid-stream switch. When it
+  falls back to **HLS**, quality is put back to **Low** so the remote stream stays watchable.
+
+
+## 0.26.78 — much sharper drive video on the LAN (720p instead of 480p)
+- The drive view always forced the robot to **Low (848×480)**. That dated back to a lag problem which
+  — measured again — was really the **x264 `fast` preset**, not the resolution. With `ultrafast` the
+  robot's **High source (2304×1296)** downscaled to ~720p runs at **25 fps with 0 dropped frames and
+  ~36% CPU on a 2-core host**.
+- So quality now follows the **transport**, because they have opposite constraints:
+  - **On your LAN (WebRTC)** → the robot is switched to **High** → visibly sharper ~720p, still fluid.
+  - **From remote (HLS)** → stays on **Low**, so it remains watchable through the proxy.
+- Your own quality setting is saved on entering the drive view and **restored when you leave** — and if
+  you pick a quality by hand in the fullscreen ⚙ menu, that choice is kept instead of being overwritten.
+
+
+## 0.26.77 — readable battery / Wi-Fi gauges, and clearer feedback when sending the robot to sleep
+- **Battery and signal are now little bar gauges** instead of an emoji and a raw number: the battery
+  is a 4-segment gauge that turns amber below 50% and red below 20%, with a **⚡ bolt while charging**;
+  Wi-Fi is 4 bars (a bare "-64 dBm" meant nothing). Hovering still shows the exact value. Used in the
+  robot list, the robot page and the fullscreen bar.
+- **Sleep now gives immediate feedback.** The add-on can only *stop watching* the robot — the robot
+  itself then closes its eyes after a few seconds to a couple of minutes (same as closing the official
+  app), so the button used to look like it did nothing. It now dims the picture at once, says
+  "Going to sleep…" and shows a short message explaining the delay. Waking shows a message too.
+
+
+## 0.26.76 — looking at a robot no longer wakes it, and you can send it to sleep with one tap
+- **Fixed: opening a robot woke it up by itself.** The panel sent `camera/set on` as soon as you opened
+  the robot page, so it could never stay asleep while you just checked on it — and the new "tap to
+  wake" button never had a chance to appear. Now **looking is passive**: you wake it deliberately
+  (the button on the picture, **☀ Wake**, or by entering the drive view).
+- **New: send it to sleep on demand** — a **😴 Sleep** button on the picture (bottom-left) while the
+  robot is awake, and the row button is now clearly labelled **😴 Sleep (Zz)** instead of "Standby".
+
+
+## 0.26.75 — the last frame now survives an add-on restart
+- 0.26.74 kept showing the last frame while the robot sleeps, but that cache lived only in memory —
+  so after an add-on update or restart the tile was blank again until the robot woke up. The last
+  frame is now **also stored on disk** and reloaded at startup.
+
+
+## 0.26.74 — see the last frame while the robot sleeps, and wake it with one tap
+- **The picture no longer disappears when the robot is asleep (ZZ).** Both the robot list and the
+  detail keep showing the **last frame we saw**, dimmed, with a **Zz** badge — so you still see where
+  the robot was. (It also stops the panel from stalling for seconds on every refresh trying to grab a
+  stream that isn't there.)
+- **New: a big "Sleeping — tap to wake" button in the middle of the picture** on the robot page, so you
+  no longer have to enter fullscreen just to wake it. It disappears as soon as the robot is streaming.
+- The view now rebuilds when a robot falls asleep or wakes, so this appears/disappears on its own.
+
+
+## 0.26.73 — sending the robot home now lets it sleep as soon as it arrives
+- When you press **Dock / return to base**, the add-on now **releases the session the moment the robot
+  reaches the charger**, so it goes to sleep (ZZ) right away instead of sitting awake on the base
+  because we were still "watching". Sending it home means you're done with it.
+- If you **drive again** after issuing dock, the pending sleep-on-dock is cancelled — you took control
+  back. It also gives up after 10 minutes if the docking never completes.
+- Follows the same option as auto-standby: with **"Let the robot sleep after (minutes)" = 0** (never
+  sleep) this is disabled too.
+
+
+## 0.26.72 — the robot can finally fall asleep again (auto-standby)
+- **The add-on kept the robot permanently awake.** The robot only sleeps when nobody is watching, and
+  the bridge stayed in its Agora session for as long as the add-on ran — so it never showed the **ZZ
+  eyes**, unlike when you close the official app. That was constant surveillance nobody asked for.
+- New option **"Let the robot sleep after (minutes)"** (default **5**, `0` = never): after that long
+  with no commands, the add-on **leaves the session** so the robot goes to sleep, exactly like closing
+  the app. Any command — or opening the camera / drive view — wakes it again (and 0.26.70's fresh
+  cloud session means it comes back even from deep sleep).
+- While you're driving, the fullscreen view re-asserts the camera every ~20 s, so it stays awake.
+- Known limitation: only *commands* postpone standby. Passively watching the `camera.ebo` card does
+  not, so the robot may doze off while you watch — drive from the panel, or set the option to 0.
+
+
+## 0.26.71 — fix the reconnect loop introduced in 0.26.70
+- 0.26.70 made the wake helper reconnect when no frames were flowing — but that helper is also called
+  from the connect path and from the "still waiting for the first frame" retry (every 8 s), so it
+  recursed: reconnect → wake → reconnect… roughly every 3 seconds, re-asking the cloud for a session
+  each time. Split in two: `_wake()` only sends the opcode (safe to repeat), while the full
+  cloud-backed wake runs **only** from the explicit `wake` command.
+- Added a **rate limit** on the forced rejoin (at most once every 15 s) so no future change can spin
+  that loop again.
+
+
+## 0.26.70 — wake the robot from DEEP sleep (the "parked on the dock, ZZ eyes" one)
+- There are **two different sleeps**, and we only handled one:
+  * **light standby** — we left the Agora channel (Standby button, or the robot dozed while we were
+    connected). A fresh viewer join wakes it. This already worked.
+  * **deep sleep** — the robot drives itself home, sits on the dock and shows the **ZZ eyes**. It then
+    **leaves Agora entirely** and keeps only its link to Enabot's cloud. Re-joining the channel with
+    our **cached** tokens reached nobody, so the robot could only be revived from the official app.
+- **Fix:** the wake paths now ask the cloud for a **fresh session first** (exactly what the app does
+  every time you open a robot) and then rejoin — that cloud call is what tells a deeply-sleeping robot
+  to come back online. Applies to `set_connected(on)`, the forced rejoin, and the `wake` command,
+  which now also performs the full rejoin instead of only sending `isSleeping=false`.
+
+
 ## 0.26.69 — the key-extraction steps are now IN the add-on documentation
 - 0.26.68 added the guide as a separate file, but Home Assistant's **Documentation** tab can't follow
   relative links — so it was effectively invisible from inside HA. The **full procedure is now written

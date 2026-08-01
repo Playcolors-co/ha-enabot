@@ -60,6 +60,38 @@ ALLOWED_CMDS = {
 _robots = {}
 _lock = threading.Lock()
 _snap_cache = {}
+_snap_fail = {}      # node -> ts of the last failed grab (backoff while the robot sleeps)
+# Last good frame, also kept on disk: the panel restarts with the add-on (updates, crashes), and an
+# in-memory-only cache would leave you staring at a blank tile until the robot wakes up again.
+_SNAP_DIR = os.environ.get("EBO_SNAP_DIR", "/data")
+
+
+def _snap_path(node):
+    safe = "".join(c for c in str(node) if c.isalnum() or c in "-_")
+    return os.path.join(_SNAP_DIR, "last_frame_%s.jpg" % (safe or "ebo"))
+
+
+def _snap_load(node):
+    """Last frame from a previous run (so a restart doesn't blank the thumbnails)."""
+    try:
+        with open(_snap_path(node), "rb") as f:
+            data = f.read()
+        if data:
+            _snap_cache[node] = (0, data)      # ts=0: stale, so a live grab is always preferred
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _snap_store(node, data):
+    try:
+        tmp = _snap_path(node) + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, _snap_path(node))
+    except Exception:
+        pass
 _snap_lock = {}
 _client = None
 
@@ -225,10 +257,17 @@ def _snapshot(node):
     with _lock:
         r = _robots.get(node)
         url = r and r.get("rtsp")
-    if not url:
-        return None
+        asleep = bool(r) and r.get("camera") != "on"
     now = time.time()
     ts, cached = _snap_cache.get(node, (0, None))
+    # Robot asleep (ZZ) or no stream: there's nothing to grab, and trying costs a multi-second
+    # ffmpeg timeout on every refresh — which made the thumbnails go blank and the panel sluggish.
+    # Serve the LAST frame we saw instead, so you still see where the robot is.
+    if not url or asleep:
+        return cached or _snap_load(node)
+    # Same when a grab just failed (stream still coming up): don't retry in a tight loop.
+    if cached and now - _snap_fail.get(node, 0) < 5:
+        return cached
     if cached and now - ts < 0.25:          # short cache: keep frames FRESH (low latency > fps)
         return cached
     lock = _snap_lock.setdefault(node, threading.Lock())
@@ -245,15 +284,18 @@ def _snapshot(node):
             ["ffmpeg", "-nostdin", "-fflags", "nobuffer", "-flags", "low_delay",
              "-probesize", "32", "-analyzeduration", "0", "-rtsp_transport", "tcp",
              "-i", internal, "-frames:v", "1", "-q:v", "6", "-f", "mjpeg", "pipe:1"],
-            capture_output=True, timeout=8).stdout
+            capture_output=True, timeout=5).stdout
         if out:
             _snap_cache[node] = (time.time(), out)
+            _snap_fail.pop(node, None)
+            _snap_store(node, out)
             return out
+        _snap_fail[node] = time.time()
     except Exception:
-        pass
+        _snap_fail[node] = time.time()
     finally:
         lock.release()
-    return cached
+    return cached or _snap_load(node)
 
 
 # --------------------------- HTTP: dashboard + tiny API ---------------------------
@@ -561,6 +603,43 @@ input[type=range]{width:100%}
 @media(prefers-color-scheme:dark){.ic:hover{background:#ffffff14}}
 .bigwrap{position:relative;cursor:pointer}
 .fshint{position:absolute;right:10px;bottom:20px;background:#0008;color:#fff;font-size:11px;padding:3px 8px;border-radius:8px;pointer-events:none}
+/* sleeping (ZZ): keep showing the last frame, dimmed, with a big wake button over it */
+.bigwrap.asleep .big{filter:grayscale(.6) brightness(.45)}
+.wakebtn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2;display:flex;
+  flex-direction:column;align-items:center;gap:6px;border:0;cursor:pointer;color:#fff;
+  background:rgba(20,24,28,.72);backdrop-filter:blur(4px);padding:16px 22px;border-radius:16px}
+.wakebtn .ic{font-size:34px;line-height:1}
+.wakebtn .tx{font-size:12px;opacity:.9}
+.wakebtn:active{transform:translate(-50%,-50%) scale(.95)}
+.wakebtn.busy{opacity:.6;pointer-events:none}
+.sleepbtn{position:absolute;left:10px;bottom:20px;z-index:2;border:0;cursor:pointer;color:#fff;
+  background:rgba(20,24,28,.72);backdrop-filter:blur(4px);font-size:12px;padding:5px 10px;border-radius:10px}
+.sleepbtn:active{transform:scale(.95)}
+.sleepbtn.busy{opacity:.6;pointer-events:none}
+/* battery + wifi as little bar gauges — a raw "-64" means nothing to most people */
+.ind{display:inline-flex;align-items:center;gap:4px;vertical-align:-2px}
+.bat{position:relative;width:26px;height:13px;border:1.5px solid currentColor;border-radius:3px;
+  display:inline-flex;gap:1px;padding:1.5px;box-sizing:border-box}
+.bat::after{content:"";position:absolute;right:-4px;top:3.5px;width:2.5px;height:5px;
+  background:currentColor;border-radius:0 2px 2px 0}
+.bat i{flex:1;background:currentColor;opacity:.2;border-radius:1px}
+.bat i.on{opacity:1}
+.bat.ok{color:#2ea36a}.bat.warn{color:#d68a00}.bat.low{color:#c0392b}.bat.none{color:#8a929a}
+.bat .bolt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:10px;line-height:1;color:#fff;text-shadow:0 0 3px #000,0 0 2px #000}
+.sig{display:inline-flex;align-items:flex-end;gap:2px;height:13px}
+.sig i{width:3px;background:currentColor;opacity:.2;border-radius:1px}
+.sig i.on{opacity:1}
+.sig i:nth-child(1){height:4px}.sig i:nth-child(2){height:7px}
+.sig i:nth-child(3){height:10px}.sig i:nth-child(4){height:13px}
+.sig.good{color:#2ea36a}.sig.fair{color:#d68a00}.sig.weak{color:#c0392b}.sig.none{color:#8a929a}
+.thumbwrap{position:relative}
+#toast{position:fixed;left:50%;bottom:18px;transform:translate(-50%,20px);z-index:60;opacity:0;
+  background:rgba(20,24,28,.92);color:#fff;font-size:13px;padding:9px 14px;border-radius:12px;
+  pointer-events:none;transition:opacity .25s,transform .25s;max-width:90%;text-align:center}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+.zzbadge{position:absolute;top:6px;right:6px;background:#0009;color:#cfe;font-size:11px;
+  padding:2px 6px;border-radius:8px;pointer-events:none}
 .warn{background:#e67e22;color:#fff;border-radius:10px;padding:9px 12px;font-size:13px;margin:10px 0;font-weight:600}
 dialog{border:0;border-radius:14px;padding:0;max-width:440px;width:92%;background:#fff;color:#111}
 @media(prefers-color-scheme:dark){dialog{background:#1c2126;color:#e9ecef}}
@@ -611,7 +690,7 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
   <div class="tabp" data-tab="cam" style="display:none">
     <label>Night vision</label>
     <select id="fs-nv" onchange="if(fsNode)cmd(fsNode,'night_vision/set',this.value)">${''}</select>
-    <label>Video quality</label><select id="fs-vq" onchange="if(fsNode)cmd(fsNode,'video_quality/set',this.value)">${''}</select>
+    <label>Video quality</label><select id="fs-vq" onchange="if(fsNode){_driveVQ=null;cmd(fsNode,'video_quality/set',this.value);}">${''}</select>
   </div>
   <div class="tabp" data-tab="aud" style="display:none">
     <label>Speaker volume — the robot's own voice &amp; sounds (<span id="fs-svol-v">—</span>)</label>
@@ -690,9 +769,34 @@ async function cmd(node,suffix,payload){
 }
 function esc(s){return (s==null?'':(''+s))}
 function opt(list,cur){return list.map(v=>`<option ${v==cur?'selected':''}>${v}</option>`).join('')}
+// Battery as a 4-segment gauge (green/amber/red), with a bolt while charging.
+function batHtml(pct, charging){
+  const p = (pct==null||pct==='') ? null : Math.max(0, Math.min(100, +pct));
+  const n = (p==null) ? 0 : Math.max(1, Math.ceil(p/25));
+  const cls = (p==null) ? 'none' : (p<=20 ? 'low' : (p<=50 ? 'warn' : 'ok'));
+  let bars=''; for(let i=1;i<=4;i++) bars += '<i class="'+(i<=n?'on':'')+'"></i>';
+  const on = (charging===true || charging==='true');
+  return '<span class="ind" title="Battery '+(p==null?'unknown':p+'%')+(on?' · charging':'')+'">'
+       + '<span class="bat '+cls+'">'+bars+(on?'<span class="bolt">⚡</span>':'')+'</span>'
+       + '<span>'+(p==null?'—':p+'%')+'</span></span>';
+}
+// Wi-Fi as 4 bars. The robot reports dBm (e.g. -64); some report 0-100 instead — handle both.
+function sigHtml(v){
+  const raw = (v==null||v==='') ? null : +v;
+  let n=0, label='unknown';
+  if(raw!=null && !isNaN(raw)){
+    if(raw>0){ n = Math.max(1, Math.ceil(raw/25)); }                       // percentage
+    else { n = raw>=-55?4 : raw>=-65?3 : raw>=-75?2 : 1; }                 // dBm
+    label = ['weak','fair','good','excellent'][n-1] || 'unknown';
+  }
+  const cls = n===0?'none' : (n>=3?'good' : (n===2?'fair':'weak'));
+  let bars=''; for(let i=1;i<=4;i++) bars += '<i class="'+(i<=n?'on':'')+'"></i>';
+  return '<span class="ind" title="Wi-Fi: '+label+(raw!=null?' ('+raw+(raw>0?'%':' dBm')+')':'')+'">'
+       + '<span class="sig '+cls+'">'+bars+'</span></span>';
+}
 function meta(r){const st=r.state||{};
-  const bat=(st.battery!=null)?st.battery+'%':'—', wifi=(st.wifi!=null?st.wifi:(st.rssi!=null?st.rssi:'—'));
-  return `${r.model||'EBO'} · 🔋 ${bat} · 📶 ${wifi}`;}
+  const wifi=(st.wifi!=null?st.wifi:(st.rssi!=null?st.rssi:null));
+  return `${r.model||'EBO'} · ${batHtml(st.battery, st.charging)} · ${sigHtml(wifi)}`;}
 function thumb(n){return `${B}/api/snapshot?node=${encodeURIComponent(n)}&t=${Math.floor(Date.now()/4000)}`}
 function bg(node,suffix,payload){ fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node,suffix,payload})}).catch(()=>{}); }
 // Laser is a TOGGLE: the robot reports its state (state.laser), so read it at click time and send
@@ -751,6 +855,34 @@ function routesHtml(r){
       <button class="btn" onclick="delRoute('${r.node}',${rt.id})" title="Delete route">🗑</button></div>`;
   }).join('')+'</div>';
 }
+// Wake the robot straight from the detail view (no need to enter fullscreen just to wake it).
+// camera/set on is the reliable wake: it re-joins the robot's session with a fresh cloud session.
+async function wakeRobot(node, btn){
+  if(btn){ btn.classList.add('busy'); const t=btn.querySelector('.tx'); if(t) t.textContent='Waking…'; }
+  toast('Waking the robot — this takes a few seconds');
+  await cmd(node,'camera/set','on');
+  setTimeout(refresh, 2500);      // the robot needs a moment to come back and start streaming
+}
+// Put the robot to sleep on demand (ZZ): leaving the session is exactly what makes it doze off,
+// same as closing the official app.
+async function sleepRobot(node, btn){
+  // We can only STOP WATCHING (leave the robot's session) — the robot itself then decides to doze
+  // off, which takes a few seconds to a couple of minutes, exactly like closing the official app.
+  // So give immediate feedback (dim the picture, say what's happening) instead of looking broken.
+  const wrap=document.querySelector('.bigwrap');
+  if(wrap) wrap.classList.add('asleep');
+  if(btn){ btn.classList.add('busy'); btn.textContent='😴 Going to sleep…'; }
+  toast('Sleep requested — the robot closes its eyes in a moment');
+  await cmd(node,'connected/set','off');
+  setTimeout(refresh, 2500);
+}
+// small transient message at the bottom of the panel
+function toast(msg){
+  let t=document.getElementById('toast');
+  if(!t){ t=document.createElement('div'); t.id='toast'; document.body.appendChild(t); }
+  t.textContent=msg; t.className='show';
+  clearTimeout(t._h); t._h=setTimeout(()=>{ t.className=''; }, 4000);
+}
 function replayRoute(node,name){ cmd(node,'patrol/route/set',name); setTimeout(()=>cmd(node,'patrol/start',''),350); }
 function delRoute(node,id){ if(confirm('Delete this route?')){ cmd(node,'route/delete',''+id); } }
 // recording state (optimistic, like the laser)
@@ -780,7 +912,10 @@ function saveRoute(){ const i=document.getElementById('rs-name'); const name=(i&
 // Enter detail/drive → camera/set on. Bridge-side this JOINS the Agora RTC channel, which WAKES
 // the robot exactly like opening the app (real viewer present). goBack → connected/set off leaves
 // the channel so the robot goes back to standby (ZZ). No unreliable isSleeping opcode dance.
-function openRobot(n){ SEL=n; render(true); bg(n,'camera/set','on'); }   // join RTC = wake (like the app)
+// Just LOOKING at a robot must not wake it — otherwise it can never stay asleep while you check on
+// it, and the "tap to wake" button would never appear. You wake it deliberately (that button, the
+// Wake button, or by entering the drive view).
+function openRobot(n){ SEL=n; render(true); }
 function goBack(){ const p=SEL; SEL=null; render(true); if(p) bg(p,'connected/set','off'); }  // leave = standby
 function driveNow(n){ SEL=n; render(true); bg(n,'camera/set','on'); setTimeout(()=>enterFS(n),60); }
 
@@ -874,8 +1009,8 @@ function fsTop(node){
   return `<div class="fs-info">
       <button class="fs-ic" onclick="exitFS()" title="Back" style="width:40px;height:40px;font-size:24px">‹</button>
       <span class="b" id="fs-badge2">···</span>
-      <span class="b" id="fs-bat">🔋 ${st.battery??'—'}%</span>
-      <span class="b" id="fs-wifi">📶 ${st.wifi??'—'}</span>
+      <span class="b" id="fs-bat">${batHtml(st.battery, st.charging)}</span>
+      <span class="b" id="fs-wifi">${sigHtml(st.wifi)}</span>
     </div>
     <div class="fs-actions">
       <button class="fs-ic ${laserOn?'on':''}" id="fs-laser" onclick="toggleLaser('${node}')" title="Laser">•</button>
@@ -1160,6 +1295,11 @@ async function fsPlay(node){
     if(st==='connected'){
       _fsStatus(null);                 // FLUID WebRTC is playing
       _fsWatchStats(v, pc);            // badge: WebRTC · Nfps
+      // WebRTC means the browser talks to the add-on directly: it can carry the robot's High source
+      // (~720p). Remember it, so next time we ask for High *before* connecting (no mid-stream switch).
+      localStorage.setItem('ebo_transport','webrtc');
+      const cur=(ROBOTS.find(x=>x.node===node)||{}).state||{};
+      if(cur.video_quality!=='High'){ bg(node,'video_quality/set','High'); }
       pc.addEventListener('connectionstatechange',()=>{   // self-heal if the stream drops
         if((pc.connectionState==='failed'||pc.connectionState==='disconnected') && open() && v._pc===pc){
           bg(node,'camera/set','on'); setTimeout(()=>{ if(open()&&v._pc===pc) fsPlay(node); },800);
@@ -1171,6 +1311,9 @@ async function fsPlay(node){
     await new Promise(r=>setTimeout(r,600));
   }
   if(open()){
+    localStorage.setItem('ebo_transport','hls');
+    const _st=(ROBOTS.find(x=>x.node===node)||{}).state||{};
+    if(_st.video_quality!=='Low'){ bg(node,'video_quality/set','Low'); }   // keep remote watchable
     _fsBadge(maybeRemote?'HLS · remote':'HLS · fallback', 'hls');
     console.log('[ebo] WebRTC unavailable → HLS');
     _fsStatus('Starting video…');                       // cleared when it actually plays
@@ -1194,9 +1337,21 @@ function enterFS(node){
   // which our real-time H.265→H.264 re-encode can't keep up with — frames pile up and the video lags
   // by SECONDS. At Low (848×480) the encoder keeps up → smooth ~20 fps at ~200 ms. We save the
   // previous quality and restore it on exit (so still-viewing keeps your chosen quality).
+  // Quality follows the TRANSPORT, because they have opposite constraints:
+  //   * LAN → WebRTC: the browser gets the stream directly, so we can afford the robot's HIGH
+  //     source (2304×1296) downscaled to ~720p — measured on a 2-core host: 25 fps, 0 frames
+  //     dropped, ~36% CPU. Much sharper than 480p, still fluid.
+  //   * remote → HLS: everything squeezes through the proxy, so stay on LOW (848×480) to keep it
+  //     watchable.
+  // (The old blanket "always Low" came from a lag problem that was really the *fast* x264 preset,
+  // not the resolution.)
   const r=ROBOTS.find(x=>x.node===node);
   _driveVQ=(r&&r.state&&r.state.video_quality)||null;
-  if(_driveVQ && _driveVQ!=='Low') bg(node,'video_quality/set','Low');
+  // Which quality we can afford depends on the transport that will actually be used — and the URL
+  // is a bad predictor (opening HA through your own domain looks "remote" even on the LAN). So we
+  // remember what worked LAST time and confirm it below once the connection is really up.
+  const wantVQ = (localStorage.getItem('ebo_transport')==='webrtc') ? 'High' : 'Low';
+  if(_driveVQ !== wantVQ) bg(node,'video_quality/set',wantVQ);
   setTimeout(()=>fsPlay(node),400);                 // give the camera a moment, then play
   if(fs.requestFullscreen) fs.requestFullscreen().then(()=>fs.focus()).catch(()=>{});
   if(wakeTimer) clearInterval(wakeTimer);
@@ -1211,7 +1366,7 @@ function exitFS(){
   if(wakeTimer){clearInterval(wakeTimer);wakeTimer=null;}
   const v=document.getElementById('fsvid');
   const node=v.getAttribute('data-node');
-  if(_driveVQ && _driveVQ!=='Low' && node) bg(node,'video_quality/set',_driveVQ);   // restore quality
+  if(_driveVQ && node) bg(node,'video_quality/set',_driveVQ);   // restore the quality you had
   _driveVQ=null;
   _cleanupVid(v);                                      // stop WebRTC + HLS
   document.getElementById('fs').style.display='none';
@@ -1246,7 +1401,10 @@ function listView(){
   if(!ROBOTS.length) return `<div class="empty">Waiting for robots… make sure the add-on is running.</div>`;
   return `<div class="list">`+ROBOTS.map(r=>`
     <div class="rowitem" onclick="openRobot('${r.node}')">
-      <img class="thumb prev" data-node="${r.node}" src="${B}/api/snapshot?node=${encodeURIComponent(r.node)}&t=${Date.now()}" onerror="this.style.opacity=.25">
+      <div class="thumbwrap">
+        <img class="thumb prev" data-node="${r.node}" src="${B}/api/snapshot?node=${encodeURIComponent(r.node)}&t=${Date.now()}" onerror="this.style.opacity=.25" style="${r.camera==='on'?'':'filter:grayscale(.6) brightness(.55)'}">
+        ${r.camera==='on'?'':'<span class="zzbadge">Zz</span>'}
+      </div>
       <div style="flex:1">
         <div class="ri-name"><span id="dot-${r.node}" class="dot ${r.online?'on':''}"></span>${esc(r.name||r.node)}</div>
         <div id="meta-${r.node}" class="ri-meta">${meta(r)}</div>
@@ -1259,18 +1417,21 @@ function detailView(r){
   const st=r.state||{}, cam=(r.camera==='on');
   const charging = (st.charging===true || st.charging==='true');
   return `<div class="detail">
-    <div class="bigwrap" onclick="enterFS('${r.node}')" title="Tap for fullscreen">
+    <div class="bigwrap ${cam?'':'asleep'}" onclick="enterFS('${r.node}')" title="Tap for fullscreen">
       <img class="big prev" data-node="${r.node}" src="${B}/api/snapshot?node=${encodeURIComponent(r.node)}&t=${Date.now()}" onerror="this.style.opacity=.25">
-      <span class="fshint">⛶ tap for fullscreen</span>
+      ${cam ? `<span class="fshint">⛶ tap for fullscreen</span>
+      <button class="sleepbtn" title="Send the robot to sleep (Zz)" onclick="event.stopPropagation();sleepRobot('${r.node}',this)">😴 Sleep</button>` : `
+      <button class="wakebtn" title="Wake the robot" onclick="event.stopPropagation();wakeRobot('${r.node}',this)">
+        <span class="ic">☀</span><span class="tx">Sleeping — tap to wake</span></button>`}
     </div>
     ${charging? '<div class="warn">🔌 On the charger — take the robot off the base to drive it.</div>':''}
     <div class="dname"><span id="d-dot" class="dot ${r.online?'on':''}"></span>${esc(r.name||r.node)}</div>
-    <div id="d-meta" class="dmeta">${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · 🔋 ${st.battery??'—'}% · 📶 ${st.wifi??'—'}</div>
+    <div id="d-meta" class="dmeta">${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · ${batHtml(st.battery, st.charging)} · ${sigHtml(st.wifi)}</div>
     <div id="d-conn" class="${connHintClass()}">${connHint()}</div>
     <div class="row">
       <button id="d-cam" class="btn ${cam?'pri':''}" onclick="cmd('${r.node}','camera/set','${cam?'off':'on'}')">${cam?'Camera ON':'Camera OFF'}</button>
-      <button class="btn" onclick="cmd('${r.node}','camera/set','on')">☀ Wake</button>
-      <button class="btn" onclick="cmd('${r.node}','connected/set','off')">🌙 Standby</button>
+      <button class="btn" onclick="wakeRobot('${r.node}')">☀ Wake</button>
+      <button class="btn" onclick="sleepRobot('${r.node}')">😴 Sleep (Zz)</button>
       <button id="d-laser" class="btn ${st.laser==='true'?'pri':''}" onclick="toggleLaser('${r.node}')">Laser ${st.laser==='true'?'ON':'OFF'}</button>
       <button class="btn" onclick="cmd('${r.node}','dock','')">Dock</button>
     </div>
@@ -1315,7 +1476,12 @@ function detailView(r){
   </div>`;
 }
 let lastSig=null;
-function sig(){ return SEL ? 'd:'+SEL : 'l:'+ROBOTS.map(r=>r.node).join(','); }
+// The signature decides when to REBUILD the view (vs just refreshing values). It includes each
+// robot's camera state so the "sleeping" look — dimmed frame, Zz badge, the big wake button —
+// appears and disappears as the robot falls asleep or wakes up.
+function camOf(n){ const r=ROBOTS.find(x=>x.node===n); return (r&&r.camera)||''; }
+function sig(){ return SEL ? 'd:'+SEL+':'+camOf(SEL)
+                           : 'l:'+ROBOTS.map(r=>r.node+':'+(r.camera||'')).join(','); }
 function render(force){
   const s=sig();
   if(!force && s===lastSig){ updateValues(); return; }   // same structure: update in place, don't rebuild (keeps the live preview from flickering)
@@ -1331,15 +1497,15 @@ function updateValues(){
     const r=ROBOTS.find(x=>x.node===SEL); if(!r) return;
     const st=r.state||{}, cam=(r.camera==='on');
     const dot=document.getElementById('d-dot'); if(dot) dot.className='dot '+(r.online?'on':'');
-    const m=document.getElementById('d-meta'); if(m) m.textContent=`${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · 🔋 ${st.battery??'—'}% · 📶 ${st.wifi??'—'}`;
+    const m=document.getElementById('d-meta'); if(m) m.innerHTML=`${r.model||'EBO'} · SN ${esc(r.sn)||'—'} · ${batHtml(st.battery, st.charging)} · ${sigHtml(st.wifi)}`;
     const cb=document.getElementById('d-cam'); if(cb){ cb.className='btn '+(cam?'pri':''); cb.textContent=cam?'Camera ON':'Camera OFF'; cb.setAttribute('onclick',`cmd('${r.node}','camera/set','${cam?'off':'on'}')`); }
     updateLaserUI(SEL);                                    // keep the laser toggle (detail + fullscreen) in sync
     updateNightUI(SEL);                                    // keep the day/night button icon in sync
     updateRecUI(SEL);                                      // keep the route-record button in sync
     const rc=document.getElementById('d-routes'); if(rc) rc.innerHTML=routesHtml(r);   // live routes list
     if(document.getElementById('fs').style.display==='block'){   // fullscreen open: refresh its top-bar info
-      const fb=document.getElementById('fs-bat'); if(fb) fb.textContent='🔋 '+(st.battery??'—')+'%';
-      const fw=document.getElementById('fs-wifi'); if(fw) fw.textContent='📶 '+(st.wifi??'—');
+      const fb=document.getElementById('fs-bat'); if(fb) fb.innerHTML=batHtml(st.battery, st.charging);
+      const fw=document.getElementById('fs-wifi'); if(fw) fw.innerHTML=sigHtml(st.wifi);
     }
   }else{
     ROBOTS.forEach(r=>{

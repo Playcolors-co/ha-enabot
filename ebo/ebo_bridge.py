@@ -61,6 +61,10 @@ except Exception:
 # ---- protocol opcodes (see docs/PROTOCOLLO.md) ----
 # The robot's mic streams at 8 kHz mono (measured on the real app). Override if it ever differs.
 AUDIO_RATE = int(os.environ.get("EBO_AUDIO_RATE", "8000"))
+# Auto-standby: seconds of no commands after which we leave the Agora session so the robot can go
+# to sleep (the ZZ eyes) like it does when you close the official app. 0 disables it (the add-on
+# then keeps the robot awake for as long as it runs — the old behaviour).
+STANDBY_TIMEOUT = int(os.environ.get("EBO_STANDBY_TIMEOUT", "300"))
 
 OP_HANDSHAKE = 101003
 OP_HEARTBEAT = 101005
@@ -179,6 +183,7 @@ class Bridge:
         self.rtc_state = None
         self.routes = []                 # [(routeName, id)] from the robot
         self.patrol_choice = PATROL_AUTO  # currently selected patrol route
+        self._last_activity = time.time()   # last user command (drives auto-standby)
         self._route_rec = False          # True while recording a route (teach-by-driving)
         self._route_pending = None       # RouteDataInfo from 103206, awaiting a name + save
         # Route/patrol support is model-dependent: the EBO Air 2 firmware ignores these opcodes (the
@@ -764,14 +769,53 @@ class Bridge:
             else:
                 self.stop.wait(8)
 
+    def _check_sleep_on_dock(self):
+        """After a 'dock' command: as soon as the robot is actually on the charger, leave the
+        session so it can go to sleep (ZZ). Sending it home means you're done with it — otherwise
+        our presence would keep it awake on the base. Disabled when auto-standby is off (0), and it
+        gives up after 10 minutes in case the docking never completed."""
+        started = getattr(self, "_sleep_on_dock", 0)
+        if not started or STANDBY_TIMEOUT <= 0 or not self.connected:
+            return
+        if time.time() - started > 600:            # docking didn't finish — stop waiting
+            self._sleep_on_dock = 0
+            return
+        b = (self.telemetry or {}).get("battery") or {}
+        on_charger = b.get("adapterStatus", -1) != -1 or bool(b.get("chargeStatus"))
+        if on_charger:
+            self._sleep_on_dock = 0
+            log("[dock] robot is on the charger — releasing the session so it can sleep")
+            try:
+                self.set_connected(False)
+            except Exception as e:
+                log("[dock] releasing the session failed:", e)
+
     def _wake(self):
-        """Wake the robot from standby (sends isSleeping=false, opcode 101047). Not movement —
-        mirrors the app, where opening the live camera wakes the robot."""
+        """Nudge the robot awake (isSleeping=false, opcode 101047). Cheap and safe to repeat: this
+        is called from the connect path and from the 'waiting for frames' retry loop, so it must
+        NOT reconnect anything (that would recurse). The heavier, cloud-backed wake used for deep
+        sleep lives in _wake_full()."""
         try:
             self.send(OP_SLEEP, {"isSleeping": False})
             log("[wake] sent wake (isSleeping=false)")
         except Exception as e:
             log("[wake] failed:", e)
+
+    def _wake_full(self):
+        """User-initiated wake. Two different sleeps exist:
+          * light standby (we left the channel, or it dozed while we watched) -> a fresh viewer join
+            brings it back;
+          * DEEP sleep (it drove home to the dock and shows the ZZ eyes) -> it left Agora entirely,
+            so no opcode of ours reaches it; only a fresh CLOUD session does.
+        Only ever called from the explicit 'wake' command, never from the connect path."""
+        self._wake()
+        try:
+            if not self.connected:
+                self.set_connected(True)          # refreshes the cloud session on its own
+            elif not (self.video and self.video.is_streaming()):
+                self._force_rejoin()              # deep sleep: needs the fresh cloud session
+        except Exception as e:
+            log("[wake] rejoin after wake failed:", e)
 
     def set_camera(self, on):
         self.video_on = on
@@ -803,7 +847,25 @@ class Bridge:
         """Leave and rejoin the Agora RTC channel: a fresh viewer join is what actually WAKES the
         robot from standby. Mirrors the app reconnecting when you reopen it. connect_agora() restarts
         the video feed on its own because video_on is True."""
+        # Rate-limit: a rejoin tears down and rebuilds the whole Agora session (and now asks the
+        # cloud for a fresh one). Video needs a few seconds to produce its first frame, so anything
+        # that retries on "not streaming yet" could otherwise spin here and hammer the cloud.
+        now = time.time()
+        if now - getattr(self, "_last_rejoin", 0) < 15:
+            return
+        self._last_rejoin = now
         log("[wake] robot not streaming — forcing a fresh RTC rejoin to wake it")
+        # DEEP sleep (the robot parked itself on the dock and shows the ZZ eyes) is different from
+        # the standby we trigger ourselves: the robot leaves Agora entirely and only keeps its link
+        # to Enabot's cloud. Re-joining the channel with our CACHED tokens then reaches nobody —
+        # which is why the robot could only be revived from the official app. The app asks the cloud
+        # for a FRESH session every time it opens a robot, and it's that cloud call which tells the
+        # robot to come back online. So do the same here before rejoining.
+        if self.provider:
+            try:
+                self.refresh_session()
+            except Exception as e:
+                log("[wake] session refresh failed (continuing):", e)
         try:
             if self.rtc:
                 try:
@@ -833,6 +895,14 @@ class Bridge:
         if on:
             self.connected = True
             log("[*] connecting session…")
+            # Ask the cloud for a FRESH session first (like the app does when you open a robot):
+            # that call is what brings a deeply-sleeping robot — one that parked on the dock and
+            # left Agora — back online. Reconnecting with cached tokens alone would not reach it.
+            if self.provider:
+                try:
+                    self.refresh_session()
+                except Exception as e:
+                    log("[*] session refresh failed (continuing):", e)
             try:
                 self.connect_agora()
                 self.send(OP_HANDSHAKE, {"userId": self.account})
@@ -968,6 +1038,7 @@ class Bridge:
         if mid == OP_TELEMETRY:
             self.telemetry = data
             self._publish_telemetry()
+            self._check_sleep_on_dock()
         elif mid == OP_SETTINGS:
             # MERGE (not replace): the robot's settings report omits some write-only fields
             # (imageStyle, callAutoRecording — confirmed absent live), so we keep the values we
@@ -1025,12 +1096,28 @@ class Bridge:
     def control_loop(self):
         """Heartbeat every 2 s; movement at 10 Hz only while there's an active vector."""
         last_beat = 0.0
+        last_idle_check = 0.0
         was_moving = False
         while not self.stop.is_set():
             now = time.time()
             if now - last_beat >= 2:
                 self.send(OP_HEARTBEAT, {"state": 0})
                 last_beat = now
+            # Auto-standby: the robot only sleeps when nobody is watching, and WE are a viewer that
+            # never leaves — which is why it never showed the ZZ eyes while the add-on ran. After
+            # STANDBY_TIMEOUT with no command from you, leave the session so it can sleep, exactly
+            # like closing the official app. Any command (or opening the camera) wakes it again.
+            if STANDBY_TIMEOUT > 0 and self.connected and now - last_idle_check >= 5:
+                last_idle_check = now
+                idle = now - getattr(self, "_last_activity", 0)
+                if idle > STANDBY_TIMEOUT:
+                    log("[standby] idle for %d min — leaving the session so the robot can sleep"
+                        % (idle / 60))
+                    self._last_activity = now      # don't re-trigger immediately
+                    try:
+                        self.set_connected(False)
+                    except Exception as e:
+                        log("[standby] failed:", e)
             with self.lock:
                 # watchdog: if the command expired, zero it (dead-man's switch)
                 if self.vec_deadline and now > self.vec_deadline:
@@ -1467,6 +1554,13 @@ class Bridge:
     def _on_mqtt_message(self, c, u, msg):
         topic = msg.topic
         payload = msg.payload.decode("utf-8", "replace").strip()
+        # Any command from you counts as "someone is using the robot" and postpones auto-standby.
+        # (Driving in fullscreen re-asserts camera/on every ~20 s, so it stays awake while you drive.)
+        self._last_activity = time.time()
+        # If you take control back by driving, cancel the "sleep once docked" intent.
+        if ("/move" in topic or topic.endswith("/joystick")) and getattr(self, "_sleep_on_dock", 0):
+            self._sleep_on_dock = 0
+            log("[dock] driving again — cancelling the sleep-on-dock")
         try:
             if topic.endswith("/laser/set"):
                 self.send(OP_LASER, {"laser": payload.lower() in ("on", "true", "1")})
@@ -1479,7 +1573,7 @@ class Bridge:
             elif topic.endswith("/sleep/set"):
                 self.send(OP_SLEEP, {"isSleeping": payload.lower() in ("on", "true", "1")})
             elif topic.endswith("/wake"):
-                self._wake()
+                self._wake_full()
             elif topic.endswith("/say"):
                 if payload:
                     self.send(OP_SAY, {"userId": self.account, "text": payload})
@@ -1524,6 +1618,12 @@ class Bridge:
             elif topic.endswith("/dock"):
                 # start returning to the charging base (no-op if already charging)
                 self.send(OP_DOCK, {"startUp": True})
+                # …and let it fall asleep as soon as it actually gets there: sending it home means
+                # you're done with it, so we leave the session once the charger reports contact
+                # (see _check_sleep_on_dock). The window guards against sleeping much later because
+                # of a dock command that never completed.
+                self._sleep_on_dock = time.time()
+                log("[dock] returning to base — will release the session once it's charging")
             elif topic.endswith("/patrol/route/set"):
                 self.patrol_choice = payload
                 self.mqtt.publish("%s/patrol/route" % NODE, payload, retain=True)
