@@ -1,5 +1,115 @@
 # Changelog — Enabot integration
 
+## 0.26.91 — the other components caught up with the audio work
+- **Integration**: new **Listen** switch, so the robot's microphone can be turned on/off from Home
+  Assistant (dashboards, automations), not just from the panel.
+- **MCP**: new **`ebo_listen`** tool, so an AI agent can open/close the microphone too.
+- **Docs**: new "Two-way audio (listen & talk)" section, and the drive-quality guidance now matches
+  reality (the drive view picks High on LAN / Low from remote by itself).
+
+
+## 0.26.90 — the audio level meters are actually readable now
+- The two meters were tiny and barely moved. They are now **bigger and brighter** (labelled 🔊 and 🎤,
+  with a visible track and a glow), and the level is computed **perceptually** (RMS with gain) instead
+  of raw peak — so normal speech clearly moves the bar. Each meter also has a **peak marker** that
+  holds briefly and falls back, so short sounds don't flash by unnoticed.
+
+
+## 0.26.89 — fix the WHIP (talk) proxy path
+- The new microphone path was routed with the wrong prefix internally, so the request died before it
+  reached mediamtx and talk could never start. Fixed.
+
+
+## 0.26.88 — talk to the robot with your phone's microphone, and see the audio levels
+- **New 🎤 button in the fullscreen view: two-way audio, like the official app.** Your browser publishes
+  the microphone to the add-on over WebRTC (WHIP) and the bridge feeds it straight into the robot's
+  speaker. Tap to start, tap again to stop; leaving the drive view stops it too.
+- **New level meters in the top bar**: a green bar for what the robot hears you play (speaker) and a
+  blue one for your microphone, so you can *see* that audio is flowing in each direction instead of
+  guessing.
+- The bridge gained a `talk/stop` command and now retries briefly when the live microphone stream
+  isn\'t published yet.
+- Requires a browser microphone permission, and (like the fluid video) a direct path to the add-on —
+  so it works on your LAN.
+
+
+## 0.26.87 — fix: the picture froze after audio was added (and made the robot look unresponsive)
+- Adding the Opus audio track broke the **snapshot grabber**: it probed only **32 bytes** of the stream
+  (a latency trick) which was no longer enough for ffmpeg to identify the streams, so **every grab
+  failed** and the panel kept serving one frozen frame. Driving still worked, but nothing on screen
+  moved — so it looked like the robot had stopped responding to commands.
+- The grabber now probes a sensible amount and takes **video only** (`-an -map 0:v:0`).
+
+
+## 0.26.86 — the robot's audio is no longer seconds behind
+- Now that you can hear the microphone, it arrived **badly delayed**. The video path drops stale frames
+  to bound latency; the audio path had **no such control** and simply queued up:
+  - the pipe feeding ffmpeg is a default **64 KB** buffer — at 8 kHz mono that is **~4 seconds** of
+    audio sitting in a queue. It is now **8 KB (~0.5 s)**, so a backlog cannot build: when it is full
+    the newest chunk is dropped and playback stays near real time;
+  - the audio input used a 1024-packet queue and no low-latency flags → now **64** with
+    `nobuffer`/`low_delay`, like the video input;
+  - Opus now encodes in **lowdelay** mode with **10 ms** frames, and `aresample=async=1` keeps the
+    audio glued to the timeline instead of drifting further behind.
+
+
+## 0.26.85 — THE reason you could not hear the robot: WebRTC can't carry AAC
+- The stream did contain the microphone audio, but it was encoded as **AAC** — and **WebRTC does not
+  support AAC** (only Opus, G.711 and G.722). So in the drive view the browser was handed a
+  video-only stream: there was literally nothing to unmute.
+- The audio is now encoded as **Opus** (48 kHz mono, VoIP mode), which WebRTC carries natively and
+  mediamtx's fMP4 HLS also supports. Combined with 0.26.81 (opening the robot mic) and 0.26.84 (the
+  speaker button unmuting the player), listening now works end to end.
+
+
+## 0.26.84 — you can now actually HEAR the robot in the drive view
+- The microphone audio was reaching Home Assistant, but the fullscreen player is created **muted** —
+  browsers only allow autoplay when a video starts muted, and nothing ever unmuted it. So there was
+  simply no sound to hear.
+- The **🔊 button now does both halves**: it opens the robot's microphone (opcode 102001) *and*
+  unmutes the player (a real tap is required by the browser, which is exactly what this is). Tap again
+  to mute and close the mic. The icon shows whether you're currently hearing the robot.
+
+
+## 0.26.83 — fix: raw HTML appearing in the robot list
+- After a few seconds the robot list showed the battery/Wi-Fi gauges as **raw markup** instead of the
+  little bar icons. The periodic refresh was still writing that line as plain *text*, while 0.26.77
+  changed it to return HTML. It now updates it as markup, so the gauges keep rendering.
+
+
+## 0.26.82 — a Listen switch you can actually press
+- 0.26.81 opened the robot's microphone automatically, but there was **no control for it**. Now there is:
+  - **Robot page → Audio → "Listen — hear the robot\'s microphone"** toggle;
+  - **Fullscreen → 🔊 / 🔇 button** next to the laser and day/night buttons.
+- Turning it off sends `102001 {"open":0}` (the robot stops publishing its mic), turning it on sends
+  `open:1`. The choice is remembered and re-applied whenever the robot rejoins.
+- Reminder shown in the UI: the audio rides **inside the camera stream**, so the video player must be
+  unmuted to actually hear it.
+
+
+## 0.26.81 — LISTEN WORKS: the robot's microphone finally comes through
+- **Solved the long-standing "listen" problem.** Subscribing to the robot's audio track was never
+  enough — the robot only **starts publishing its microphone** when it is explicitly told to open that
+  direction: opcode **`102001 {"type":1,"open":1}`**. We never sent it, so the track stayed subscribed
+  and silent, which looked exactly like a muted mic (and sent us chasing codecs for weeks).
+- Verified live: the mic came up **within a second** of the command — `bitrate ~73 kbps, 8000 Hz mono,
+  0 loss`, matching what the official app gets — and `open:0` stops it again (bitrate 0).
+- The bridge now sends it automatically when the robot joins and audio is enabled, and re-sends it once
+  if no audio has arrived. The **talk** direction gets the matching `102003 {"type":1,"open":1}`.
+- Along the way the audio codec option gained `0` (µ-law) and `auto`; the default `8` (G.711 A-law) is
+  correct — the codec was never the problem.
+
+
+## 0.26.80 — audio investigation: more codec options, quieter log
+- The robot's audio subscription reaches state **SUBSCRIBED**, not "no publisher" — which suggests the
+  robot *does* publish a mic track and we simply fail to DECODE it, rather than the mic being muted.
+- So the **audio codec** option now also accepts **`0`** (G.711 μ-law — never tried; only 8/A-law and
+  9/G.722 were selectable) and **`auto`** (force nothing and let the SDK negotiate — forcing the wrong
+  payload type looks exactly like a muted mic).
+- The video statistics line now logs **every 30 s instead of every 5 s**: it was flooding the add-on
+  log and pushing the audio diagnostics out of the buffer within minutes.
+
+
 ## 0.26.79 — the sharper drive video now actually kicks in (fix for 0.26.78)
 - 0.26.78 chose the quality from the **URL** (the "are we remote?" guess). If you open Home Assistant
   through your own domain — even while sitting on the same LAN — that guess says "remote", so it kept

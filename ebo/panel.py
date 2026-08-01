@@ -46,9 +46,9 @@ ALLOWED_CMDS = {
     "say", "talk",
     "video_quality/set", "image_style/set", "volume/set", "talkback_volume/set",
     "speed/set", "sports_record/set", "call_rec/set", "eyes/set",
-    "move_mode/set", "avoid_obstacle/set", "night_vision/set",
+    "move_mode/set", "avoid_obstacle/set", "night_vision/set", "listen/set",
     "patrol/start", "patrol/stop", "patrol/route/set",
-    "route/record/start", "route/record/stop", "route/save", "route/delete",
+    "route/record/start", "route/record/stop", "route/save", "route/delete", "talk/stop",
     # raw opcode escape hatch for AI/automation (and the eyes protocol): {"id":<op>,"data":{...}}
     "cmd",
 }
@@ -281,9 +281,14 @@ def _snapshot(node):
         internal = "rtsp://127.0.0.1:%s%s" % (p.port or 8554, p.path)
         # grab the FRESHEST frame with minimal buffering: no probe/analyze delay, no jitter buffer.
         out = subprocess.run(
+            # NOTE: probesize used to be 32 bytes for minimum latency. That silently broke every
+            # grab as soon as the stream also carried an Opus audio track — ffmpeg could no longer
+            # identify the streams, so the panel kept showing one frozen frame (and it looked like
+            # the robot had stopped responding). Probe a little more, and take video only.
             ["ffmpeg", "-nostdin", "-fflags", "nobuffer", "-flags", "low_delay",
-             "-probesize", "32", "-analyzeduration", "0", "-rtsp_transport", "tcp",
-             "-i", internal, "-frames:v", "1", "-q:v", "6", "-f", "mjpeg", "pipe:1"],
+             "-probesize", "200k", "-analyzeduration", "300000", "-rtsp_transport", "tcp",
+             "-i", internal, "-an", "-map", "0:v:0",
+             "-frames:v", "1", "-q:v", "6", "-f", "mjpeg", "pipe:1"],
             capture_output=True, timeout=5).stdout
         if out:
             _snap_cache[node] = (time.time(), out)
@@ -369,10 +374,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(502, b"", "text/plain")
 
-    def _proxy_whep(self, raw_path):
-        """Forward a WHEP SDP offer to the local mediamtx WebRTC endpoint and return its SDP answer.
+    def _proxy_whep(self, raw_path, kind="whep"):
+        """Forward a WHEP/WHIP SDP offer to the local mediamtx WebRTC endpoint and return its SDP
+        answer. WHEP = we receive the robot's video; WHIP = we publish your microphone.
         Restricted to the WebRTC ports (8189-8192) so it can't be used as an open proxy."""
-        rest = raw_path.split("/whepp/", 1)[1]
+        rest = raw_path.split("/whipp/" if kind == "whip" else "/whepp/", 1)[1]
         port, _, sub = rest.partition("/")
         if not port.isdigit() or not (8189 <= int(port) <= 8192) or not sub:
             return self._send(400, b"", "text/plain")
@@ -381,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
             offer = self.rfile.read(n)
         except Exception:
             return self._send(400, b"", "text/plain")
-        url = "http://127.0.0.1:%s/%s/whep" % (port, sub)
+        url = "http://127.0.0.1:%s/%s/%s" % (port, sub, kind)
         req = urllib.request.Request(url, data=offer, method="POST")
         req.add_header("Content-Type", "application/sdp")
         try:
@@ -394,7 +400,7 @@ class Handler(BaseHTTPRequestHandler):
             status, answer = e.code, e.read()
             ctype = e.headers.get("Content-Type", "text/plain")
         except Exception as e:
-            log("[whep] proxy failed:", e)
+            log("[%s] proxy failed: %s" % (kind, e))
             return self._send(502, b"", "text/plain")
         self.send_response(status)
         self.send_header("Content-Type", ctype)
@@ -458,6 +464,10 @@ class Handler(BaseHTTPRequestHandler):
         raw_path = urlparse(self.path).path
         if "/whepp/" in raw_path:
             return self._proxy_whep(raw_path)
+        # WHIP: the same thing in the other direction — the browser PUBLISHES your microphone to
+        # mediamtx, and the bridge picks that stream up and plays it through the robot's speaker.
+        if "/whipp/" in raw_path:
+            return self._proxy_whep(raw_path, kind="whip")
         path = urlparse(self.path).path.rstrip("/")
         try:
             n = int(self.headers.get("Content-Length", 0))
@@ -560,6 +570,17 @@ input[type=range]{width:100%}
 .fs-info .b{background:#0006;padding:3px 8px;border-radius:8px;backdrop-filter:blur(3px)}
 .fs-info .b.rtc{background:rgba(18,184,134,.55);color:#eafff5}
 .fs-info .b.hls{background:rgba(214,138,0,.6);color:#fff5e0}
+/* tiny level meters so you can SEE that audio is flowing, both ways */
+.vu{display:none;align-items:center;gap:5px;background:#0007;border-radius:9px;padding:3px 7px;
+  backdrop-filter:blur(3px);vertical-align:middle;font-size:11px;line-height:1}
+.vu.on{display:inline-flex}
+.vu .bar{position:relative;width:64px;height:10px;background:#ffffff26;border-radius:5px;overflow:hidden}
+.vu .bar i{position:absolute;left:0;top:0;bottom:0;width:0%;border-radius:5px;
+  transition:width .06s linear}
+.vu .pk{position:absolute;top:0;bottom:0;width:2px;background:#fff;opacity:.85;left:0;
+  transition:left .12s linear}
+.vu.spk .bar i{background:linear-gradient(90deg,#12b886,#2ee6a8);box-shadow:0 0 6px #2ee6a880}
+.vu.mic .bar i{background:linear-gradient(90deg,#2b6cff,#59a7ff);box-shadow:0 0 6px #59a7ff80}
 .fs-hlswarn{position:absolute;top:50px;left:50%;transform:translateX(-50%);z-index:3;max-width:calc(100% - 24px);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   background:rgba(176,90,0,.85);color:#fff;font-size:11px;padding:3px 12px;border-radius:12px;
@@ -863,6 +884,145 @@ async function wakeRobot(node, btn){
   await cmd(node,'camera/set','on');
   setTimeout(refresh, 2500);      // the robot needs a moment to come back and start streaming
 }
+// Hearing the robot needs BOTH halves: the robot must publish its mic (opcode 102001 — subscribing
+// alone gets you a silent track) AND the <video> must be unmuted. Browsers force muted autoplay, so
+// the player always starts silent; only a real tap may unmute it. This one button does both.
+function hearingRobot(){ const v=document.getElementById('fsvid'); return !!(v && !v.muted); }
+function updateListenUI(){
+  const b=document.getElementById('fs-listen'); if(!b) return;
+  const on=hearingRobot();
+  b.textContent = on?'🔊':'🔇';
+  b.className = 'fs-ic'+(on?' on':'');
+  b.title = on ? 'Listening to the robot — tap to mute' : 'Listen to the robot';
+}
+async function toggleListen(node){
+  const want = !hearingRobot();
+  const v=document.getElementById('fsvid');
+  if(v){ v.muted = !want; if(want){ v.volume = 1; v.play().catch(()=>{}); } }
+  if(want) startSpeakerMeter(); else stopSpeakerMeter();
+  updateListenUI();
+  toast(want ? 'Listening to the robot' : 'Muted');
+  await cmd(node,'listen/set', want?'on':'off');
+}
+
+// ---- Talk (your phone/PC microphone -> the robot's speaker) --------------------------------
+// The browser PUBLISHES the mic to mediamtx over WebRTC (WHIP) on a "talk" path; the bridge then
+// reads that live stream and pushes it into the robot's Agora channel. Same plumbing as the video,
+// just in the opposite direction.
+let _talkPc=null, _talkStream=null;
+function _rtspPortOf(node){
+  const r=ROBOTS.find(x=>x.node===node);
+  try{ return parseInt(new URL((r.rtsp||'').replace(/^rtsp:/,'http:')).port||'8554',10); }
+  catch(e){ return 8554; }
+}
+function talking(){ return !!_talkPc; }
+function updateTalkUI(){
+  const b=document.getElementById('fs-talk'); if(!b) return;
+  const on=talking();
+  b.className='fs-ic'+(on?' on':'');
+  b.title=on?'Talking — tap to stop':'Talk to the robot (your microphone)';
+  const m=document.getElementById('vu-mic'); if(m) m.className='vu mic'+(on?' on':'');
+}
+async function toggleTalk(node){
+  if(talking()){ return stopTalk(node); }
+  let stream;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia(
+      {audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}});
+  }catch(e){ toast('Microphone blocked — allow it for this page'); return; }
+  _talkStream = stream;
+  const pc = new RTCPeerConnection({iceServers:[]});
+  _talkPc = pc;
+  stream.getAudioTracks().forEach(t=>pc.addTrack(t, stream));
+  const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
+  await new Promise(res=>{ if(pc.iceGatheringState==='complete') return res();
+    const t=setTimeout(res,1200);
+    pc.addEventListener('icegatheringstatechange',()=>{ if(pc.iceGatheringState==='complete'){clearTimeout(t);res();} }); });
+  const rp=_rtspPortOf(node), wp=8189+(rp-8554);
+  let ok=false;
+  try{
+    const r=await fetch(B+'/whipp/'+wp+'/talk',{method:'POST',
+      headers:{'Content-Type':'application/sdp'}, body:pc.localDescription.sdp});
+    if(r.ok){ await pc.setRemoteDescription({type:'answer', sdp:await r.text()}); ok=true; }
+    else toast('Talk failed ('+r.status+')');
+  }catch(e){ toast('Talk failed: '+e.message); }
+  if(!ok){ return stopTalk(node); }
+  startMicMeter(stream);
+  updateTalkUI();
+  toast('Talking — the robot is playing your voice');
+  // give mediamtx a moment to accept the publisher, then have the robot play it
+  setTimeout(()=>cmd(node,'talk','rtsp://127.0.0.1:'+rp+'/talk'), 700);
+}
+async function stopTalk(node){
+  try{ await cmd(node,'talk/stop',''); }catch(e){}
+  if(_talkPc){ try{_talkPc.close();}catch(e){} _talkPc=null; }
+  if(_talkStream){ try{_talkStream.getTracks().forEach(t=>t.stop());}catch(e){} _talkStream=null; }
+  stopMicMeter();
+  updateTalkUI();
+}
+
+// ---- Level meters: show that audio is actually flowing, both ways --------------------------
+let _ac=null, _micAn=null, _spkAn=null, _vuRaf=null, _spkSrcEl=null;
+function _audioCtx(){
+  if(!_ac){ const C=window.AudioContext||window.webkitAudioContext; if(!C) return null; _ac=new C(); }
+  if(_ac.state==='suspended'){ _ac.resume().catch(()=>{}); }
+  return _ac;
+}
+function _analyser(node){
+  const ac=_audioCtx(); if(!ac) return null;
+  const an=ac.createAnalyser(); an.fftSize=256; an.smoothingTimeConstant=0.6;
+  node.connect(an); return an;
+}
+function _level(an){
+  if(!an) return 0;
+  const buf=new Uint8Array(an.fftSize); an.getByteTimeDomainData(buf);
+  let sum=0; for(let i=0;i<buf.length;i++){ const d=(buf[i]-128)/128; sum+=d*d; }
+  const rms=Math.sqrt(sum/buf.length);
+  // Perceptual: quiet speech is a very small RMS, so take a root and add gain — otherwise the bar
+  // barely twitches even when the audio is perfectly audible.
+  return Math.max(0, Math.min(1, Math.pow(rms, 0.45) * 2.2));
+}
+const _pk={};      // per-meter peak hold, decays slowly so short peaks stay visible
+function _vuTick(){
+  const set=(id,v)=>{
+    const e=document.getElementById(id); if(!e) return;
+    const b=e.querySelector('.bar i'), p=e.querySelector('.pk');
+    if(b) b.style.width=Math.round(v*100)+'%';
+    const prev=_pk[id]||0;
+    const peak=Math.max(v, prev-0.012);          // hold, then fall back gently
+    _pk[id]=peak;
+    if(p) p.style.left=Math.max(0, Math.round(peak*100)-2)+'%';
+  };
+  set('vu-mic', _level(_micAn));
+  set('vu-spk', _level(_spkAn));
+  _vuRaf=requestAnimationFrame(_vuTick);
+}
+function _vuStart(){ if(!_vuRaf) _vuTick(); }
+function _vuStopIfIdle(){ if(!_micAn && !_spkAn && _vuRaf){ cancelAnimationFrame(_vuRaf); _vuRaf=null; } }
+function startMicMeter(stream){
+  const ac=_audioCtx(); if(!ac) return;
+  try{ _micAn=_analyser(ac.createMediaStreamSource(stream)); _vuStart(); }catch(e){}
+}
+function stopMicMeter(){ _micAn=null; _pk['vu-mic']=0; const m=document.getElementById('vu-mic');
+  if(m){ m.className='vu mic'; const b=m.querySelector('.bar i'); if(b) b.style.width='0%'; } _vuStopIfIdle(); }
+function startSpeakerMeter(){
+  const v=document.getElementById('fsvid'); const ac=_audioCtx(); if(!v||!ac) return;
+  try{
+    let src;
+    if(v.srcObject && v.srcObject.getAudioTracks && v.srcObject.getAudioTracks().length){
+      src=ac.createMediaStreamSource(v.srcObject);        // WebRTC path
+    }else{
+      if(_spkSrcEl!==v){ _spkSrcEl=v; _spkSrcEl._node=ac.createMediaElementSource(v);
+        _spkSrcEl._node.connect(ac.destination); }        // HLS path: keep it audible
+      src=_spkSrcEl._node;
+    }
+    _spkAn=_analyser(src);
+    const e=document.getElementById('vu-spk'); if(e) e.className='vu spk on';
+    _vuStart();
+  }catch(e){}
+}
+function stopSpeakerMeter(){ _spkAn=null; _pk['vu-spk']=0; const e=document.getElementById('vu-spk');
+  if(e){ e.className='vu spk'; const b=e.querySelector('.bar i'); if(b) b.style.width='0%'; } _vuStopIfIdle(); }
 // Put the robot to sleep on demand (ZZ): leaving the session is exactly what makes it doze off,
 // same as closing the official app.
 async function sleepRobot(node, btn){
@@ -1011,10 +1171,14 @@ function fsTop(node){
       <span class="b" id="fs-badge2">···</span>
       <span class="b" id="fs-bat">${batHtml(st.battery, st.charging)}</span>
       <span class="b" id="fs-wifi">${sigHtml(st.wifi)}</span>
+      <span class="vu spk" id="vu-spk" title="Robot audio (what you hear)">🔊<span class="bar"><i></i><span class="pk"></span></span></span>
+      <span class="vu mic" id="vu-mic" title="Your microphone (what the robot hears)">🎤<span class="bar"><i></i><span class="pk"></span></span></span>
     </div>
     <div class="fs-actions">
       <button class="fs-ic ${laserOn?'on':''}" id="fs-laser" onclick="toggleLaser('${node}')" title="Laser">•</button>
       <button class="fs-ic" id="fs-night" onclick="cycleNight('${node}')" title="Day/Night vision">${NV_ICON[st.night_vision]||'🌗'}</button>
+      <button class="fs-ic" id="fs-listen" onclick="toggleListen('${node}')" title="Listen to the robot">🔇</button>
+      <button class="fs-ic" id="fs-talk" onclick="toggleTalk('${node}')" title="Talk to the robot (hold a conversation)">🎤</button>
       ${st.routes_supported==='true' ? `<button class="fs-ic ${st.route_recording==='true'?'rec':''}" id="fs-rec" onclick="recordRoute('${node}')" title="Record a route (drive to teach a path)">⏺</button>` : ''}
       <button class="fs-ic" onclick="cmd('${node}','dock','')" title="Return to base">⌂</button>
       <button class="fs-ic" onclick="openFsSettings()" title="Settings">⚙</button>
@@ -1327,6 +1491,7 @@ function enterFS(node){
   const hw=document.getElementById('fs-hlswarn');   // re-arm the brief HLS notice for this session
   if(hw){ hw.dataset.shown=''; hw.style.display='none'; hw.classList.remove('fade'); }
   document.getElementById('fs-top').innerHTML=fsTop(node);
+  updateListenUI();
   renderFsControls(node);          // dual sticks or single joystick, per the saved preference
   const v=document.getElementById('fsvid');
   v.setAttribute('data-node',node);                 // keyboard driving reads the node from here
@@ -1360,6 +1525,8 @@ function enterFS(node){
 }
 function toggleFsControls(){ document.getElementById('fs').classList.toggle('hidectl'); }
 function exitFS(){
+  if(talking()) stopTalk(fsNode);
+  stopSpeakerMeter();
   stopMove(); if(fsTimer){clearInterval(fsTimer);fsTimer=null;}
   if(fsDriveTimer){clearInterval(fsDriveTimer);fsDriveTimer=null;} fsDX=0; fsDY=0;
   if(fsNode) sendVec(fsNode,0,0,0); fsNode=null;
@@ -1459,6 +1626,9 @@ function detailView(r){
       <label>Eyes</label><select onchange="cmd('${r.node}','eyes/set',this.value)">${opt(EY,st.eyes)}</select>
     </div>
     <div class="sec"><h4>Audio</h4>
+      <label class="tgl"><span>Listen — hear the robot's microphone</span>
+        <input type="checkbox" ${st.listen!=='false'?'checked':''} onchange="cmd('${r.node}','listen/set',this.checked?'on':'off')"></label>
+      <div class="note" style="font-size:11px;color:#8a929a;margin-top:2px">The audio comes through the camera stream — unmute the player to hear it.</div>
       <label>Speaker volume — the robot's own voice &amp; sounds (${st.volume??st.playback_volume??'—'})</label>
       <input type="range" min="0" max="100" value="${st.volume??st.playback_volume??50}" onchange="cmd('${r.node}','volume/set',this.value)">
       <label>Call volume — your voice through the robot, two-way talk (${st.talkback_volume??'—'})</label>
@@ -1510,7 +1680,7 @@ function updateValues(){
   }else{
     ROBOTS.forEach(r=>{
       const dot=document.getElementById('dot-'+r.node); if(dot) dot.className='dot '+(r.online?'on':'');
-      const m=document.getElementById('meta-'+r.node); if(m) m.textContent=meta(r);
+      const m=document.getElementById('meta-'+r.node); if(m) m.innerHTML=meta(r);   // meta() returns markup (battery/wifi gauges)
     });
   }
 }

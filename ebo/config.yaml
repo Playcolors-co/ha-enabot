@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.26.79"
+version: "0.26.91"
 slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
@@ -101,7 +101,7 @@ schema:
   video_fps: int
   video_bitrate: int
   video_preset: list(ultrafast|superfast|veryfast|faster|fast)?
-  audio_codec: list(8|9)?
+  audio_codec: list(auto|0|8|9)?
   # let the robot sleep after N minutes with no commands (0 = never)
   standby_after_minutes: int
   # AI agents (MCP): off by default — the server only runs when this is on

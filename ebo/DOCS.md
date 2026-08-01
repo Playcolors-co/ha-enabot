@@ -128,7 +128,9 @@ defaults are already correct, but if the video is **choppy or laggy**, check the
   and the **recommended** value. Heavier presets (`fast`, `faster`, …) look nicer but are too slow to
   re-encode in real time on typical HA hosts (especially low-core NUCs/mini-PCs) — the encoder falls
   behind, frames pile up, and the video lags by **seconds**. Keep it on `ultrafast`.
-- **Video quality for live/driving = `Low` or `Medium`** (per-robot select, or the robot detail page).
+- **Video quality**: the drive view now picks this **for you** — **High (~720p)** when the browser
+  gets the fluid WebRTC path (on your LAN), **Low** when it falls back to HLS (from remote). You can
+  still override it in the fullscreen ⚙ → Camera.
   At **High** the robot sends **2304×1296 (3 MP)** — far too much to re-encode live on most hosts, so
   the picture lags. At **Low (848×480)** the encoder keeps up at a full ~25 fps with ~200 ms latency.
   - You don't have to think about this while **driving**: the panel's **fullscreen drive view
@@ -183,6 +185,25 @@ data:
 The full opcode catalog (motion presets, voice, TTS, camera, eyes, scheduling, system…) is in
 [COMANDI.md](COMANDI.md), usable via the raw `ebo/cmd` topic. Commands that move the robot
 should only be used when you can see it.
+
+## Two-way audio (listen & talk)
+
+The robot has a microphone and a speaker, and the add-on can use both.
+
+- **Listen** — hear the room through the robot. Turn it on with the **🔊 button in the fullscreen
+  view** (or the *Listen* toggle on the robot page / the `switch` entity). The sound is carried
+  **inside the camera stream**, so the video player must be unmuted — the 🔊 button does both for you.
+- **Talk** — speak through the robot with your phone's or computer's microphone: press the **🎤
+  button** in the fullscreen view and allow the microphone when the browser asks. Press it again to
+  stop. Your voice is sent to the add-on over WebRTC and played on the robot's speaker.
+- Two small **level meters** in the top bar (🔊 green, 🎤 blue) show that audio is actually flowing in
+  each direction.
+- You can also make the robot **speak text** (TTS) with the `say` command / entity — handy for
+  automations.
+
+Notes: the robot only starts publishing its microphone when asked to, which the add-on does for you.
+Talk needs a direct path to the add-on (like the fluid video), so it works on your LAN. Expect a small
+delay: the audio travels through Enabot's cloud in both directions.
 
 ## AI agents (MCP) — optional
 

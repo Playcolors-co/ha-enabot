@@ -84,6 +84,14 @@ OP_SPORTS_REC = 101049  # motion recording: {"sportsRecord": bool}
 OP_CALL_REC = 103071    # auto-record calls: {"callAutoRecording": int 0/1}
 OP_UPLOAD_CLOUD = 104099  # upload recordings to cloud: {"videoUploadCloud": bool}
 OP_TALKBACK_VOL = 102031  # {"talkbackVolume": int 0..100}
+# THE missing piece for two-way audio. Subscribing to the robot's audio track is not enough: the
+# robot only STARTS PUBLISHING its microphone when it is told to open that direction, with
+# {"type":1,"open":1}. Verified live: sending 102001 made the mic come up within a second
+# (bitrate ~73 kbps, 8 kHz mono), and open:0 stopped it (bitrate 0, loss 100). In the app these sit
+# right next to the local mute calls: 102001 pairs with muteRemoteAudio(uid) → LISTEN, 102003 pairs
+# with the local-mic mute → TALK.
+OP_AUDIO_LISTEN = 102001  # {"type":1,"open":0|1} — robot mic -> us
+OP_AUDIO_TALK = 102003    # {"type":1,"open":0|1} — us -> robot speaker
 OP_MOVE_MODE = 103011   # {"moveMode": int}
 OP_NIGHT_MODE = 102035  # {"shootMode": int} — the Air 2's day/night vision mode (0 Auto, 1 Day, 2 Night)
 OP_SHOOT_MODE = OP_NIGHT_MODE  # legacy alias
@@ -183,6 +191,7 @@ class Bridge:
         self.rtc_state = None
         self.routes = []                 # [(routeName, id)] from the robot
         self.patrol_choice = PATROL_AUTO  # currently selected patrol route
+        self.listen_on = True            # robot mic -> us (102001); you can switch it off
         self._last_activity = time.time()   # last user command (drives auto-standby)
         self._route_rec = False          # True while recording a route (teach-by-driving)
         self._route_pending = None       # RouteDataInfo from 103206, awaiting a name + save
@@ -222,6 +231,7 @@ class Bridge:
         self._talk_lock = threading.Lock()
         self._tx_run = False           # audio TX loop (keep-alive silence + talk) running?
         self._tx_queue = []            # queued 'talk' sources
+        self._talk_stop = False        # set by talk/stop to end a live push-to-talk
         self._tx_mode = "silence"      # DIAG: idle TX content — "silence" | "tone"
         self._tx_start_t = 0.0         # DIAG: when we started publishing (to time mic-open)
         self._tone_buf = None          # DIAG: cached tone PCM (built lazily)
@@ -279,6 +289,15 @@ class Bridge:
                                 % (tagnote, uid, r1, r2))
                         except Exception as e:
                             log("[audio] subscribe failed:", e)
+                    # Tell the robot to actually PUBLISH its mic (subscribing alone gets you a
+                    # subscribed-but-silent track — this is what we were missing all along).
+                    try:
+                        self.send(OP_AUDIO_LISTEN,
+                                  {"type": 1, "open": 1 if self.listen_on else 0})
+                        log("[audio] asked the robot to %s its mic (102001)"
+                            % ("open" if self.listen_on else "keep closed"))
+                    except Exception as e:
+                        log("[audio] could not open the robot mic:", e)
                     _sub("join")
                     # the robot's audio track may be published a moment after it joins — retry
                     # once after a short delay so we don't miss it (mirrors the app, where you
@@ -331,14 +350,21 @@ class Bridge:
         # server SDK's global handle is service.get_agora_parameter(). Set them here, pre-join.
         if self.audio_enabled:
             try:
-                pt = int(os.environ.get("EBO_AUDIO_PT", "8"))
+                # "auto" = don't force a payload type at all and let the SDK negotiate. Worth trying:
+                # forcing the WRONG type is indistinguishable from "the mic is muted" (subscribed, but
+                # nothing decodes). Payload types: 0 = G.711 u-law, 8 = G.711 A-law, 9 = G.722.
+                pt_opt = (os.environ.get("EBO_AUDIO_PT", "8") or "8").strip().lower()
                 gp = svc.get_agora_parameter()
-                for kv in ('{"che.audio.codec_unfallback":[0,8,9]}',
-                           '{"che.audio.custom_payload_type":%d}' % pt,
-                           '{"che.audio.aec.enable":false}'):
+                params = ['{"che.audio.codec_unfallback":[0,8,9]}', '{"che.audio.aec.enable":false}']
+                if pt_opt not in ("auto", ""):
+                    pt = int(pt_opt)
+                    params.insert(1, '{"che.audio.custom_payload_type":%d}' % pt)
+                else:
+                    pt = "auto"
+                for kv in params:
                     gp.set_parameters(kv)
                 log("[audio] codec params set on ENGINE before join "
-                    "(codec_unfallback [0,8,9], payload_type %d)" % pt)
+                    "(codec_unfallback [0,8,9], payload_type %s)" % pt)
             except Exception as e:
                 log("[audio] global set_parameters failed:", e)
         # Decoded video path: auto-subscribe so the SDK DECODES the robot's H.265 to raw YUV
@@ -385,11 +411,12 @@ class Bridge:
         # if the global pre-join set already took).
         if self.audio_enabled:
             try:
-                pt = int(os.environ.get("EBO_AUDIO_PT", "8"))
+                pt_opt = (os.environ.get("EBO_AUDIO_PT", "8") or "8").strip().lower()
                 cp = self.rtc.get_agora_parameter()
                 cp.set_parameters('{"che.audio.codec_unfallback":[0,8,9]}')
-                cp.set_parameters('{"che.audio.custom_payload_type":%d}' % pt)
-                log("[audio] codec params also set on connection after connect (pt=%d)" % pt)
+                if pt_opt not in ("auto", ""):
+                    cp.set_parameters('{"che.audio.custom_payload_type":%d}' % int(pt_opt))
+                log("[audio] codec params also set on connection after connect (pt=%s)" % pt_opt)
             except Exception as e:
                 log("[audio] connection set_parameters failed:", e)
 
@@ -541,11 +568,17 @@ class Bridge:
                         return   # _pcm already logged "robot mic is OPEN"
                     time.sleep(0.5)
                 if obs._n[0] == 0:
-                    log("[audio] subscribed OK, but the robot's mic is still MUTED. It opens on "
-                        "its own, unpredictably (sometimes minutes later, sometimes not at all). "
-                        "This is a known limitation: the phone app sends an RTM command to open "
-                        "it that we haven't captured yet. Audio will play if/when the robot "
-                        "unmutes — no action needed.")
+                    # No PCM yet: re-send the "open your mic" command (102001). The robot may have
+                    # missed it if it was still joining when we first asked.
+                    log("[audio] no PCM yet — re-asking the robot to open its mic (102001)")
+                    try:
+                        self.send(OP_AUDIO_LISTEN, {"type": 1, "open": 1})
+                    except Exception:
+                        pass
+                    time.sleep(4)
+                    if obs._n[0] == 0:
+                        log("[audio] still no PCM. The robot did not open its microphone; "
+                            "listening will start as soon as it does.")
             threading.Thread(target=_audio_watchdog, daemon=True).start()
         except Exception as e:
             log("[audio] observer registration failed:", e)
@@ -631,13 +664,21 @@ class Bridge:
             if src:
                 log("[talk] playing:", src)
                 proc = None
+                # A live push-to-talk source (rtsp://…/talk published by the browser) can take a
+                # moment to appear; don't give up on the first failure.
+                live = src.startswith("rtsp://")
+                tries = 6 if live else 1
+                extra = ["-rtsp_transport", "tcp", "-fflags", "nobuffer",
+                         "-flags", "low_delay", "-probesize", "200k",
+                         "-analyzeduration", "300000"] if live else []
                 try:
                     proc = subprocess.Popen(
-                        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", src,
+                        ["ffmpeg", "-hide_banner", "-loglevel", "error"] + extra + ["-i", src,
                          "-f", "s16le", "-ac", "1", "-ar", str(AUDIO_RATE), "pipe:1"],
                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                     n = 0
-                    while self._tx_run:
+                    _t0 = time.time()
+                    while self._tx_run and not self._talk_stop:
                         chunk = proc.stdout.read(frame_bytes)
                         if not chunk:
                             break
@@ -651,6 +692,11 @@ class Bridge:
                         n += 1
                         time.sleep(0.02)
                     log("[talk] done — %d frames (~%.1fs)" % (n, n * 0.02))
+                    if live and n == 0 and not self._talk_stop and tries > 1 \
+                            and time.time() - _t0 < 10:
+                        time.sleep(0.8)          # publisher not up yet — try again shortly
+                        with self._talk_lock:
+                            self._tx_queue.insert(0, src)
                 except Exception as e:
                     log("[talk] error:", e)
                 finally:
@@ -707,6 +753,11 @@ class Bridge:
         if not (self.audio_enabled or self.talk_enabled):
             log("[talk] enable 'audio' (or 'talk') in the add-on options first")
             return
+        self._talk_stop = False
+        try:   # open the "us -> robot speaker" direction, like the app's mic button does
+            self.send(OP_AUDIO_TALK, {"type": 1, "open": 1})
+        except Exception:
+            pass
         with self._talk_lock:
             self._tx_queue.append(source)
         # if the TX loop isn't running (talk enabled but camera off), start it now
@@ -1285,7 +1336,7 @@ class Bridge:
         # native mode (expose_mqtt off), where the HA-entity discovery below is skipped. (These used
         # to sit AFTER the expose_mqtt gate, so native mode silently stopped receiving commands.)
         for _t in ("laser/set", "speed/set", "move/+", "move/vector", "joystick", "sleep/set",
-                   "wake", "say", "talk", "audio_tx/set", "volume/set", "talkback_volume/set",
+                   "wake", "say", "talk", "talk/stop", "listen/set", "audio_tx/set", "volume/set", "talkback_volume/set",
                    "sports_record/set", "call_rec/set", "upload_cloud/set", "dock",
                    "patrol/route/set", "patrol/start", "patrol/stop", "camera/set", "connected/set",
                    "route/record/start", "route/record/stop", "route/save", "route/delete",
@@ -1526,6 +1577,8 @@ class Bridge:
         c.subscribe("%s/wake" % NODE)
         c.subscribe("%s/say" % NODE)
         c.subscribe("%s/talk" % NODE)          # play audio (URL/path) through the robot speaker
+        c.subscribe("%s/listen/set" % NODE)    # open/close the robot's microphone (102001)
+        c.subscribe("%s/talk/stop" % NODE)     # end a live push-to-talk
         c.subscribe("%s/audio_tx/set" % NODE)  # DIAG A/B: off | silence | tone
         c.subscribe("%s/volume/set" % NODE)
         c.subscribe("%s/talkback_volume/set" % NODE)
@@ -1578,6 +1631,20 @@ class Bridge:
                 if payload:
                     self.send(OP_SAY, {"userId": self.account, "text": payload})
                     self.mqtt.publish("%s/say/state" % NODE, payload)
+            elif topic.endswith("/talk/stop"):
+                # end a live push-to-talk: drop what's queued and break the current playback
+                self._talk_stop = True
+                with self._talk_lock:
+                    self._tx_queue = []
+                self.send(OP_AUDIO_TALK, {"type": 1, "open": 0})
+                log("[talk] stopped")
+            elif topic.endswith("/listen/set"):
+                # open/close the robot's microphone (what the app's speaker button does)
+                on = payload.lower() in ("on", "true", "1")
+                self.listen_on = on
+                self.send(OP_AUDIO_LISTEN, {"type": 1, "open": 1 if on else 0})
+                log("[audio] listen -> %s" % ("on" if on else "off"))
+                self._publish_settings()
             elif topic.endswith("/talk"):
                 # play arbitrary audio (URL/path) through the robot's speaker — YOUR voice/audio
                 self._talk(payload)
@@ -1775,6 +1842,7 @@ class Bridge:
             "laser": "true" if stt.get("laserStatus") else "false",
             "speed": se.get("moveSpeed"),
             "talkback_volume": se.get("talkbackVolume"),
+            "listen": "true" if self.listen_on else "false",
             "sports_record": "true" if se.get("sportsRecord") else "false",
             "call_rec": "true" if se.get("callAutoRecording") else "false",
             # routes / patrol (teach-and-repeat): the saved routes, plus recording state.

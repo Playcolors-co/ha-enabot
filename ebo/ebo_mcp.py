@@ -191,6 +191,16 @@ async def ebo_laser(node: str = "", on: bool = True) -> str:
 
 
 @mcp.tool()
+async def ebo_listen(node: str = "", on: bool = True) -> str:
+    """Open or close the robot's microphone. With it on you can hear the room through the robot
+    (the audio is carried inside the camera stream)."""
+    robots = await _robots()
+    node = _node(robots, node)
+    await _cmd(node, "listen/set", "on" if on else "off")
+    return f"listen -> {'on' if on else 'off'}."
+
+
+@mcp.tool()
 async def ebo_say(node: str = "", text: str = "") -> str:
     """Make the robot speak (text-to-speech through its speaker)."""
     robots = await _robots()

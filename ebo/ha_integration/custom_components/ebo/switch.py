@@ -15,7 +15,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry,
                             add: AddEntitiesCallback) -> None:
     c = hass.data[DOMAIN][entry.entry_id]
     add([EboCameraSwitch(c, entry), EboLaserSwitch(c, entry),
-         EboObstacleSwitch(c, entry)])
+         EboObstacleSwitch(c, entry), EboListenSwitch(c, entry)])
 
 
 class EboCameraSwitch(EboEntity, SwitchEntity):
@@ -76,3 +76,24 @@ class EboObstacleSwitch(EboEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.cmd(self._node, "avoid_obstacle/set", "off")
+
+
+class EboListenSwitch(EboEntity, SwitchEntity):
+    """Listen — the robot's microphone. The robot only publishes its mic once asked to (the add-on
+    sends that command); the audio then rides inside the camera stream."""
+
+    _attr_icon = "mdi:microphone"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator, entry, "listen")
+        self._attr_name = "Listen"
+
+    @property
+    def is_on(self) -> bool:
+        return self._state.get("listen") != "false"
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.cmd(self._node, "listen/set", "on")
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.cmd(self._node, "listen/set", "off")
