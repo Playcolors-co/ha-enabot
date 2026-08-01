@@ -638,9 +638,10 @@ input[type=range]{width:100%}
 .sleepbtn:active{transform:scale(.95)}
 .sleepbtn.busy{opacity:.6;pointer-events:none}
 /* battery + wifi as little bar gauges — a raw "-64" means nothing to most people */
-.ind{display:inline-flex;align-items:center;gap:4px;vertical-align:-2px}
+.ind{display:inline-flex;align-items:center;gap:4px;vertical-align:-2px;margin-right:5px;white-space:nowrap}
 .bat{position:relative;width:26px;height:13px;border:1.5px solid currentColor;border-radius:3px;
   display:inline-flex;gap:1px;padding:1.5px;box-sizing:border-box}
+.bat{margin-right:3px}
 .bat::after{content:"";position:absolute;right:-4px;top:3.5px;width:2.5px;height:5px;
   background:currentColor;border-radius:0 2px 2px 0}
 .bat i{flex:1;background:currentColor;opacity:.2;border-radius:1px}

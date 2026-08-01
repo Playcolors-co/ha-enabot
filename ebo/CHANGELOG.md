@@ -1,5 +1,15 @@
 # Changelog — Enabot integration
 
+## 0.26.92 — screenshots in the README, and two small UI fixes they revealed
+- The project finally **shows what it looks like**: the README now leads with the driving view, the
+  panel and a robot as a Home Assistant device (`ebo/docs/img/`).
+- **Fixed:** the *Eyes* select sat on **"unknown"** forever — the robot never reports that setting
+  back, so the add-on now echoes the last value you chose (same treatment the other write-only
+  settings already had).
+- **Fixed:** in the robot list the battery gauge crowded the percentage next to it, and the info line
+  could wrap awkwardly onto two lines.
+
+
 ## 0.26.91 — the other components caught up with the audio work
 - **Integration**: new **Listen** switch, so the robot's microphone can be turned on/off from Home
   Assistant (dashboards, automations), not just from the panel.

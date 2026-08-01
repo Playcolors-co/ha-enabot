@@ -192,6 +192,7 @@ class Bridge:
         self.routes = []                 # [(routeName, id)] from the robot
         self.patrol_choice = PATROL_AUTO  # currently selected patrol route
         self.listen_on = True            # robot mic -> us (102001); you can switch it off
+        self.eyes_choice = None          # last eyes style we set (write-only on the robot)
         self._last_activity = time.time()   # last user command (drives auto-standby)
         self._route_rec = False          # True while recording a route (teach-by-driving)
         self._route_pending = None       # RouteDataInfo from 103206, awaiting a name + save
@@ -1754,6 +1755,8 @@ class Bridge:
                 self.send(OP_MOVE_MODE, {"moveMode": MOVE_MODE_MAP.get(payload, 0)})
             elif topic.endswith("/eyes/set"):
                 mode, style = EYES_STYLES.get(payload, (1, 1))
+                if payload in EYES_STYLES:
+                    self.eyes_choice = payload      # so the UI can show what's selected
                 self.send(OP_EYES, {
                     "status": 0, "mode": mode,
                     "dynamicEyes": {"autoFollow": False, "styleId": style if mode == 1 else 1},
@@ -1843,6 +1846,9 @@ class Bridge:
             "speed": se.get("moveSpeed"),
             "talkback_volume": se.get("talkbackVolume"),
             "listen": "true" if self.listen_on else "false",
+            # Write-only on the robot (it never reports them back), so we echo what we last set —
+            # otherwise these selects sit on "unknown" forever.
+            "eyes": self.eyes_choice or "",
             "sports_record": "true" if se.get("sportsRecord") else "false",
             "call_rec": "true" if se.get("callAutoRecording") else "false",
             # routes / patrol (teach-and-repeat): the saved routes, plus recording state.

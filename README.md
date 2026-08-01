@@ -1,8 +1,35 @@
 # EBO for Home Assistant (unofficial)
 
-Manage your **Enabot EBO robots** from Home Assistant — **every robot on your account**, without
-the phone app. One add-on signs into the Enabot cloud with **your own credentials** (like the EBO
-HOME app), discovers all your robots, and gives you a panel, entities and a live camera for each.
+**Drive your Enabot EBO robot from Home Assistant** — see through it, talk through it, and put it
+in your automations. No phone app needed.
+
+<p align="center">
+  <img src="ebo/docs/img/drive-fullscreen.png" alt="Driving the robot from Home Assistant: dual-stick control over a live video feed, with battery, signal, laser, night vision, listen and talk buttons" width="820">
+</p>
+
+<p align="center">
+  <em>Full-screen driving: two sticks, ~200 ms video on your LAN, and two-way audio.</em>
+</p>
+
+| | |
+|---|---|
+| 🎮 **Drive it** | analog joystick or dual sticks, low-latency WebRTC video |
+| 👀 **See it** | a real Home Assistant camera per robot, for dashboards and automations |
+| 🔊 **Hear & talk** | listen through the robot's microphone and speak back from your phone |
+| 🤖 **Automate it** | every control as an entity — plus an optional MCP server for AI agents |
+
+<p align="center">
+  <img src="ebo/docs/img/panel-list.png" alt="The EBO sidebar panel listing every robot on the account with a live preview, battery and signal" width="620">
+  <img src="ebo/docs/img/ha-entities.png" alt="A robot as a Home Assistant device, with entities for camera, laser, listen, night vision, driving mode and more" width="250">
+</p>
+
+<p align="center">
+  <em>Left: the sidebar panel (all your robots). Right: one robot as a normal HA device.</em>
+</p>
+
+One add-on signs into the Enabot cloud with **your own credentials** (exactly like the EBO HOME
+app), discovers **every robot on your account**, and gives you a panel, entities and a live camera
+for each.
 
 > ⚠️ Independent, unofficial project. Not affiliated with Enabot or ThroughTek/Agora. It
 > interoperates using **your own** credentials and devices, through reverse engineering. Use at
