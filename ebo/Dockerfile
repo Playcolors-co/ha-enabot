@@ -13,6 +13,11 @@ ARG AGORA_SDK_VERSION=2.4.9
 RUN pip install --no-cache-dir --retries 5 --timeout 60 \
         "agora-python-server-sdk==${AGORA_SDK_VERSION}" paho-mqtt cryptography segno
 
+# MCP server for AI agents (optional, opt-in at runtime): non-fatal — if this can't be installed the
+# add-on still works, the MCP option just logs that it's unavailable.
+RUN pip install --no-cache-dir --retries 3 --timeout 60 "fastmcp>=2.0" httpx \
+    || echo "WARN: fastmcp not installed — the MCP server option will be unavailable"
+
 # --- video-only extras (optional): a failure here must NOT break the add-on update ---
 # ffmpeg (republish the stream). If it can't be installed, video just won't work.
 RUN (apt-get update \
@@ -41,7 +46,7 @@ WORKDIR /app
 # image always contains the current code. VERSION.txt is DERIVED from config.yaml at build so
 # it can never drift out of sync with the released version (a manual bump was easy to forget,
 # causing a false "stale image" warning). run.sh logs it to prove which version is live.
-COPY config.yaml ebo_bridge.py ebo_cloud.py ebo_sign.py ebo_video.py ebo_log.py panel.py run.sh /app/
+COPY config.yaml ebo_bridge.py ebo_cloud.py ebo_sign.py ebo_video.py ebo_log.py panel.py ebo_mcp.py run.sh /app/
 # Bundle the companion integration so run.sh can install it into /homeassistant/custom_components.
 COPY ha_integration /app/ha_integration
 RUN sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' /app/config.yaml > /app/VERSION.txt \

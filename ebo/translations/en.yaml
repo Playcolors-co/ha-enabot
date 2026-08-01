@@ -53,6 +53,12 @@ configuration:
   audio_codec:
     name: Audio codec (payload type)
     description: The robot microphone's codec payload type (8 or 9). Leave at 8 unless "listen" doesn't work.
+  mcp:
+    name: Allow AI agents (MCP)
+    description: >-
+      Starts an MCP server so AI assistants can control the robot with the camera in the loop (look →
+      decide → move), protected by this add-on's API token. OFF by default — when off, nothing runs and
+      it costs no resources. Only turn it on if you actually connect an AI agent.
   log_level:
     name: Log level
     description: Add-on log verbosity. info (default), debug (chatty, for troubleshooting), warning (only problems).

@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.26.60"
+version: "0.26.64"
 slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
@@ -28,8 +28,11 @@ ports:
   8191/udp: 8191
   8192/tcp: 8192
   8192/udp: 8192
+  # MCP server for AI agents (only listens when the 'mcp' option is ON; bearer-token guarded)
+  8100/tcp: 8100
 ports_description:
   8098/tcp: "Data API for the Enabot integration — internal, no need to change"
+  8100/tcp: "MCP server for AI agents — only active when the 'Allow AI agents (MCP)' option is on"
   8189/tcp: "WebRTC drive video (robot 1) — signalling; no need to change"
   8189/udp: "WebRTC drive video (robot 1) — media/ICE; no need to change"
 # Our base is python:3.11-slim (not an HA base image with s6): disable HA init.
@@ -70,6 +73,9 @@ options:
   video_bitrate: 2500
   video_preset: ultrafast
   audio_codec: "8"
+  # AI/MCP: expose the robot to MCP-capable AI agents (look → decide → move). OFF by default:
+  # the server only starts when this is on, so it costs nothing if you don't use it.
+  mcp: false
   log_level: info
 schema:
   email: str
@@ -89,6 +95,8 @@ schema:
   video_bitrate: int
   video_preset: list(ultrafast|superfast|veryfast|faster|fast)?
   audio_codec: list(8|9)?
+  # AI agents (MCP): off by default — the server only runs when this is on
+  mcp: bool
   # add-on log verbosity: info (default) | debug (chatty) | warning (only problems)
   log_level: list(debug|info|warning)?
   # token the companion integration uses to read this add-on's data API. Auto-generated if empty;

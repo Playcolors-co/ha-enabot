@@ -159,6 +159,35 @@ The full opcode catalog (motion presets, voice, TTS, camera, eyes, scheduling, s
 [COMANDI.md](COMANDI.md), usable via the raw `ebo/cmd` topic. Commands that move the robot
 should only be used when you can see it.
 
+## AI agents (MCP) — optional
+
+The add-on can expose the robot to **MCP-capable AI assistants** so they can drive it **with the camera
+in the loop**: the agent *looks* through the robot, decides, then moves. It's **off by default** —
+turn on **"Allow AI agents (MCP)"** in the Configuration tab. When off, nothing runs (no resources used).
+
+- **Endpoint:** `http://<your-HA-host>:8100/mcp` (streamable HTTP).
+- **Auth:** send `Authorization: Bearer <api_token>` — the same `api_token` from the Configuration tab.
+  Without it the server answers 401, so nobody on your LAN can drive the robot.
+- **Tools:** `ebo_list`, `ebo_state`, `ebo_wake`, `ebo_look` (returns the live camera image),
+  `ebo_move`, `ebo_stop`, `ebo_dock`, `ebo_night_vision`, `ebo_laser`, `ebo_say`.
+- **Safety:** `ebo_move` **refuses to move unless `ebo_look` was called moments before** (no blind
+  driving), and caps speed and step duration. It also refuses while the robot sits on its base.
+
+Example client config (Claude Desktop and similar):
+
+```json
+{
+  "mcpServers": {
+    "ebo": {
+      "url": "http://192.168.1.50:8100/mcp",
+      "headers": { "Authorization": "Bearer YOUR_api_token" }
+    }
+  }
+}
+```
+
+Then ask it things like *"look through the EBO and, if the way is clear, nudge it forward."*
+
 ## Known limitations
 
 - **amd64 only** (the Agora SDK is x86_64).

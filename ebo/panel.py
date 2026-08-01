@@ -1085,16 +1085,48 @@ function _waitConn(pc, ms){
       else if(pc.connectionState==='failed'){clearTimeout(t);res('failed');} });
   });
 }
-function hlsPlay(node){
+function hlsPlay(node, attempt){
   const v=document.getElementById('fsvid'); const src=hlsSrc(node);
   if(!src) return;
+  attempt=attempt||0;
+  const open=()=>document.getElementById('fs').style.display==='block';
+  // CRITICAL: a previous WebRTC attempt may have left a (dead) MediaStream on the element via
+  // pc.ontrack. srcObject takes PRECEDENCE over MSE/src, so HLS would attach and show a BLACK
+  // screen. Always detach the peer connection and clear srcObject before playing HLS.
+  if(v._pc){ try{v._pc.close();}catch(e){} v._pc=null; }
+  if(v._statTimer){ clearInterval(v._statTimer); v._statTimer=null; }
+  if(v._hls){ try{v._hls.destroy();}catch(e){} v._hls=null; }
+  try{ v.srcObject=null; }catch(e){}
   if(window.Hls && Hls.isSupported()){
+    // Low-Latency HLS everywhere: measured on a real remote connection (through a Cloudflare tunnel)
+    // it works and is noticeably closer to live than plain HLS. Don't "downgrade" it off-LAN — the
+    // black screen people saw was the leftover WebRTC srcObject (cleared above), not LL-HLS.
     const hls=new Hls({lowLatencyMode:true, backBufferLength:4});
-    hls.on(Hls.Events.ERROR,(e,d)=>{ if(d.fatal){ try{hls.destroy();}catch(x){} setTimeout(()=>{ if(document.getElementById('fs').style.display==='block') hlsPlay(node); },1500); }});
-    hls.loadSource(src); hls.attachMedia(v); v._hls=hls;
+    v._hls=hls;
+    hls.on(Hls.Events.ERROR,(e,d)=>{
+      if(!d.fatal) return;
+      // Try the built-in recoveries first (they keep the same session), then re-create, and finally
+      // TELL THE USER instead of looping on a black screen forever.
+      if(d.type===Hls.ErrorTypes.NETWORK_ERROR && attempt<3){
+        try{ hls.startLoad(); return; }catch(x){}
+      }
+      if(d.type===Hls.ErrorTypes.MEDIA_ERROR && attempt<3){
+        try{ hls.recoverMediaError(); return; }catch(x){}
+      }
+      try{hls.destroy();}catch(x){}
+      if(!open()) return;
+      if(attempt<3){ setTimeout(()=>{ if(open()) hlsPlay(node, attempt+1); }, 1500); }
+      else { _fsStatus('Video unavailable over this connection ('+(d.details||d.type)+
+                       '). Try again, or use the LAN/VPN for the fluid stream.'); }
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{ v.play().catch(()=>{}); });
+    hls.loadSource(src); hls.attachMedia(v);
     v.play().catch(()=>{});
   } else if(v.canPlayType('application/vnd.apple.mpegurl')){
-    v.src=src; v.play().catch(()=>{});
+    // Safari / iOS webview: native HLS.
+    v.src=src;
+    v.addEventListener('error',()=>{ if(open()) _fsStatus('Video unavailable over this connection.'); },{once:true});
+    v.play().catch(()=>{});
   }
 }
 // Play the fluid WebRTC. The stream appears only a few seconds AFTER camera/set on (the robot has to
@@ -1107,18 +1139,15 @@ async function fsPlay(node){
   const gen=(v._gen=(v._gen||0)+1);
   const open=()=>document.getElementById('fs').style.display==='block' && v._gen===gen;
   _fsStatus('Connecting to the robot…');
-  // Off-LAN (cellular / remote access): the direct WebRTC UDP path can't be reached and there's no
-  // STUN/TURN, so trying it would only hang before falling back. Go STRAIGHT to the Ingress-proxied
-  // HLS (which works remotely). The status overlay clears once the video actually starts playing;
-  // hls.js self-heals the first few seconds while the robot wakes + publishes its first segment.
-  if(isLikelyRemote()){
-    _fsBadge('HLS · remote', 'hls');
-    console.log('[ebo] off-LAN → HLS diretto (WebRTC saltato)');
-    v.addEventListener('playing',()=>{ if(open()) _fsStatus(null); },{once:true});
-    hlsPlay(node);
-    return;
-  }
-  const deadline=Date.now()+20000;   // keep trying while the robot wakes + first frame arrives
+  // The URL only HINTS at where you are: opening HA through a domain (Cloudflare/Nabu Casa/reverse
+  // proxy) looks "remote" even when you're sitting on the same LAN as the robot — and then WebRTC
+  // would work fine. So we NEVER skip WebRTC: when the URL looks remote we just probe it BRIEFLY
+  // (a few seconds) and fall back to HLS if it can't connect. On the LAN (any URL) you still get the
+  // fluid ~200 ms video; truly off-LAN you lose only a few seconds before HLS takes over.
+  const maybeRemote=isLikelyRemote();
+  const deadline=Date.now()+(maybeRemote?6000:20000);
+  const connWait=maybeRemote?3500:6000;   // how long to wait for ICE per attempt
+  const maxIceFails=maybeRemote?1:2;
   let iceFails=0;
   while(open() && Date.now()<deadline){
     let pc;
@@ -1126,7 +1155,7 @@ async function fsPlay(node){
     catch(e){ if(!open()) return; await new Promise(r=>setTimeout(r,900)); continue; }  // not ready → retry
     if(!open()){ try{pc.close();}catch(e){} return; }
     v._pc=pc;
-    const st=await _waitConn(pc, 6000);
+    const st=await _waitConn(pc, connWait);
     if(!open()){ try{pc.close();}catch(e){} return; }
     if(st==='connected'){
       _fsStatus(null);                 // FLUID WebRTC is playing
@@ -1138,10 +1167,16 @@ async function fsPlay(node){
       return;
     }
     try{pc.close();}catch(e){} v._pc=null;
-    if(++iceFails>=2) break;          // answer OK but ICE won't connect → network issue → HLS
+    if(++iceFails>=maxIceFails) break;   // answer OK but ICE won't connect → network issue → HLS
     await new Promise(r=>setTimeout(r,600));
   }
-  if(open()){ _fsStatus(null); _fsBadge('HLS · fallback', 'hls'); console.log('[ebo] WHEP unavailable → HLS fallback'); hlsPlay(node); }
+  if(open()){
+    _fsBadge(maybeRemote?'HLS · remote':'HLS · fallback', 'hls');
+    console.log('[ebo] WebRTC unavailable → HLS');
+    _fsStatus('Starting video…');                       // cleared when it actually plays
+    v.addEventListener('playing',()=>{ if(open()) _fsStatus(null); },{once:true});
+    hlsPlay(node);
+  }
 }
 let _driveVQ=null;   // video quality saved on entering drive, restored on exit
 function enterFS(node){

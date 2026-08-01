@@ -1,5 +1,54 @@
 # Changelog — Enabot integration
 
+## 0.26.64 — restore the low-latency remote video (undo an unnecessary downgrade)
+- 0.26.63 fixed the black screen (leftover WebRTC `srcObject`) but ALSO switched off-LAN playback to
+  plain HLS on a hunch that proxies/CDNs break Low-Latency HLS. That hunch was wrong — LL-HLS works
+  fine through a real remote connection and is much closer to live. Reverted: **Low-Latency HLS is used
+  everywhere again**, so the control-to-video lag is back to the 0.26.60 behaviour.
+- Kept from 0.26.63: the **black-screen fix** (always detach the peer connection / clear `srcObject`
+  before starting HLS) and **visible error reporting** instead of a silent black video.
+
+
+## 0.26.63 — fix BLACK screen on the remote HLS fallback (regression from 0.26.62)
+- 0.26.62 started always *trying* WebRTC first (so LAN users on a domain URL get the fluid video). But
+  a failed WebRTC attempt leaves a dead MediaStream on the `<video>` element (`pc.ontrack` sets
+  `srcObject`), and **`srcObject` takes precedence over the HLS/MSE source** — so the HLS fallback
+  attached correctly but rendered a **black screen** over cellular. The player now always detaches the
+  peer connection and clears `srcObject` before starting HLS.
+- Off-LAN also switches to **plain HLS instead of Low-Latency HLS**: LL-HLS relies on blocking playlist
+  reloads and chunked "parts" that reverse proxies/CDNs (Cloudflare tunnel, Nabu Casa) tend to buffer or
+  break. Slightly more delay, but it actually plays.
+- HLS failures are now **reported on screen** (with the reason) after a few recovery attempts, instead
+  of silently looping on a black video. Recovery uses hls.js's own network/media recovery first.
+
+
+## 0.26.62 — fluid video also when you open HA by domain name on your own LAN
+- **Fixed:** the panel decided "you're remote" from the **URL alone**, so opening Home Assistant through
+  a domain (Cloudflare / Nabu Casa / reverse proxy) forced the slower **HLS even while you were on the
+  same network as the robot** — where WebRTC works perfectly.
+- Now the URL is only a **hint**: WebRTC is **always attempted**. When the URL looks remote it's probed
+  **briefly** (~4-6 s) and falls back to HLS if it truly can't connect. So: same LAN by any URL → fluid
+  ~200 ms video; genuinely off-LAN → a few seconds, then HLS as before.
+- This also helps **across subnets** (e.g. a guest/IoT VLAN): if routing allows it, WebRTC now connects
+  instead of being skipped outright.
+
+
+## 0.26.61 — MCP server for AI agents (opt-in, off by default)
+- The add-on can now expose the robot to **MCP-capable AI assistants**, with the camera **in the loop**:
+  the agent calls `ebo_look` (gets the live image), decides, then `ebo_move`. Tools: `ebo_list`,
+  `ebo_state`, `ebo_wake`, `ebo_look`, `ebo_move`, `ebo_stop`, `ebo_dock`, `ebo_night_vision`,
+  `ebo_laser`, `ebo_say`.
+- **Off by default.** New option **"Allow AI agents (MCP)"** — when off, the server never starts, so it
+  uses no resources. Turn it on only if you connect an agent.
+- **Token-protected:** the endpoint (`http://<HA-host>:8100/mcp`) requires
+  `Authorization: Bearer <api_token>` (the add-on's own token); unauthenticated requests get 401 —
+  verified.
+- **Safety by design:** `ebo_move` refuses to move unless `ebo_look` ran moments before (no blind
+  driving), caps speed/duration, and refuses while the robot is on its charging base.
+- Installing `fastmcp` is **non-fatal**: if it can't be installed, everything else works and the option
+  simply reports as unavailable.
+
+
 ## 0.26.60 — reliable camera.ebo snapshots (fixes intermittent 500)
 - `camera.ebo` still images no longer depend on Home Assistant extracting a keyframe from the internal
   RTSP itself — that default path returns **500** when it can't grab a frame in time (seen by tooling /

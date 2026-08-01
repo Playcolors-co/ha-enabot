@@ -202,6 +202,7 @@ term() {
   stopping=1
   echo "[add-on] stopping…"
   pkill -TERM -f '/app/panel.py' 2>/dev/null || true
+  pkill -TERM -f '/app/ebo_mcp.py' 2>/dev/null || true
   pkill -TERM -f '/app/ebo_bridge.py' 2>/dev/null || true
   for _ in $(seq 1 16); do
     pgrep -f '/app/ebo_bridge.py' >/dev/null 2>&1 || break
@@ -248,6 +249,20 @@ run_robot() {
 export EBO_PANEL_PORT="${EBO_PANEL_PORT:-8099}"
 python /app/panel.py &
 PANEL_PID=$!
+
+# MCP server for AI agents (opt-in): only started when the 'mcp' option is ON, so it costs nothing
+# when unused. Guarded by the add-on's api_token (Bearer). Non-fatal: if fastmcp isn't available or
+# it fails to start, the add-on keeps working normally.
+EBO_MCP="$(pget mcp false)"
+if [ "$EBO_MCP" = "true" ]; then
+  export EBO_MCP_PORT="${EBO_MCP_PORT:-8100}"
+  if python -c 'import fastmcp' 2>/dev/null; then
+    echo "[add-on] starting MCP server for AI agents on :${EBO_MCP_PORT} (token-guarded)"
+    python /app/ebo_mcp.py &
+  else
+    echo "[add-on] MCP requested but 'fastmcp' isn't installed in this image — skipping"
+  fi
+fi
 
 for i in "${!RIDS[@]}"; do
   run_robot "${RIDS[$i]}" "$i" "${RNAMES[$i]}" &

@@ -54,6 +54,12 @@ configuration:
   audio_codec:
     name: Codec audio (payload type)
     description: Il payload type del codec del microfono del robot (8 o 9). Lascia 8 a meno che l'"ascolto" non funzioni.
+  mcp:
+    name: Consenti agenti AI (MCP)
+    description: >-
+      Avvia un server MCP con cui gli assistenti AI possono controllare il robot vedendo dalla telecamera
+      (guarda → decidi → muovi), protetto dal token API di questo add-on. DISATTIVO di default — da
+      spento non gira nulla e non consuma risorse. Attivalo solo se colleghi davvero un agente AI.
   log_level:
     name: Livello di log
     description: Verbosità del log dell'add-on. info (default), debug (verboso, per diagnostica), warning (solo problemi).
