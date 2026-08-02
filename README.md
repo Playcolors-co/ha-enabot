@@ -3,6 +3,10 @@
 **Drive your Enabot EBO robot from Home Assistant** — see through it, talk through it, and put it
 in your automations. No phone app needed.
 
+[![build](https://github.com/Playcolors-co/ha-enabot/actions/workflows/build.yml/badge.svg)](https://github.com/Playcolors-co/ha-enabot/actions/workflows/build.yml)
+[![tests](https://github.com/Playcolors-co/ha-enabot/actions/workflows/test.yml/badge.svg)](https://github.com/Playcolors-co/ha-enabot/actions/workflows/test.yml)
+[![security](https://github.com/Playcolors-co/ha-enabot/actions/workflows/security.yml/badge.svg)](https://github.com/Playcolors-co/ha-enabot/actions/workflows/security.yml)
+
 <p align="center">
   <img src="ebo/docs/img/drive-fullscreen.png" alt="Driving the robot from Home Assistant: dual-stick control over a live video feed, with battery, signal, laser, night vision, listen and talk buttons" width="820">
 </p>
