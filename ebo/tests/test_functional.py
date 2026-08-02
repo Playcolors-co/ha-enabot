@@ -24,9 +24,8 @@ N = "ebo"
     ("video_quality/set", "High", 102055, {"videoQuality": 3}),
     ("video_quality/set", "Low", 102055, {"videoQuality": 1}),
     ("image_style/set", "Vivid", 102057, {"imageStyle": 1}),
-    ("shoot_mode/set", "Wide", 102035, {"shootMode": 1}),
-    ("move_mode/set", "Mode 2", 103011, {"moveMode": 1}),
-    ("eyes/set", "Clock", 104057, {"status": 0, "mode": 1}),
+    ("night_vision/set", "Night", 102035, {"shootMode": 2}),
+    ("move_mode/set", "Racing", 103011, {"moveMode": 1}),
     ("roaming/set", "on", 101061, {"isRoamOn": True, "sensitivity": 5}),
     ("ai_track", "PRESS", 103049, {"mode": 0, "trackTarget": 7}),
     ("motion/set", "3", 103005, {"cycleMode": 0, "moveId": 3}),
@@ -35,6 +34,17 @@ N = "ebo"
 def test_command_routing(bridge, topic, payload, opcode, data):
     deliver(bridge, "%s/%s" % (N, topic), payload)
     assert (opcode, data) in bridge.sent, "topic %s -> %s" % (topic, bridge.sent)
+
+
+def test_eyes_selects_the_clock_face(bridge):
+    """Eyes send a richer struct than the other settings, so check the parts that matter:
+    the opcode, the mode (2 = clock) and the chosen style."""
+    deliver(bridge, "%s/eyes/set" % N, "Clock 2")
+    sent = [(op, d) for op, d in bridge.sent if op == 104057]
+    assert sent, "no eyes command was sent"
+    op, d = sent[-1]
+    assert d["mode"] == 2                       # clock face
+    assert d["timeEyes"]["styleId"] == 2        # second clock style
 
 
 def test_say(bridge):
@@ -125,7 +135,7 @@ def test_telemetry_mapping(bridge):
     assert s["task"] == "AI tracking"      # taskId 6
     assert s["video_quality"] == "High"
     assert s["image_style"] == "Vivid"
-    assert s["move_mode"] == "Mode 2"
+    assert s["move_mode"] == "Racing"
     assert s["fw_ipc"] == "v0.8.5-0" and s["fw_mcu"] == "v1.0.6-0"
     assert s["ip"] == "192.168.30.229" and s["ssid"] == "XS4TBIOT"
 

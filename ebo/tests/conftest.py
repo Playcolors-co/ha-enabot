@@ -157,6 +157,26 @@ def bridge_rtm():
     return br
 
 
+def _pump(br):
+    """The real send() only ENQUEUES — a dedicated sender thread does the publishing, and that
+    thread isn't running under test. Drain the queue by hand so the E2E assertions see the wire."""
+    mv = None
+    if hasattr(br, "_move_lock"):
+        with br._move_lock:
+            if getattr(br, "_latest_move", None) is not None:
+                mv, br._latest_move = br._latest_move, None
+    if mv is not None:
+        br._publish_now(B.OP_MOVE, mv)
+    while True:
+        try:
+            mid, payload = br._send_q.get_nowait()
+        except Exception:
+            break
+        br._publish_now(mid, payload)
+
+
 def deliver(br, topic, payload):
     """Feed one MQTT command message into the bridge's handler."""
     br._on_mqtt_message(None, None, FakeMsg(topic, payload))
+    if getattr(br, "rtm", None) is not None and not isinstance(getattr(br, "sent", None), list):
+        _pump(br)          # E2E fixture (real send path) — flush what was queued

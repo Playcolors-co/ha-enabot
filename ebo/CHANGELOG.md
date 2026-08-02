@@ -1,5 +1,39 @@
 # Changelog — Enabot integration
 
+## 0.26.96 — the test suite tells the truth again
+- A full review before this release turned up that **6 tests had been failing silently**, and not
+  because of a real defect:
+  - the end-to-end test drove the *real* send path, which became **asynchronous** when commands moved
+    to a single sender thread — the test never flushed the queue, so it saw nothing on the wire. The
+    fixture now drains it explicitly;
+  - five expectations still used **old names** from earlier renames (`shoot_mode` → `night_vision`,
+    "Mode 2" → "Racing", "Clock" → "Clock 1"), and the eyes command sends a richer payload than a
+    plain equality check allows — it now has its own test asserting the parts that matter.
+- Everything else in the review came back clean: all modules compile, YAML and translations parse,
+  the panel's JavaScript is syntactically valid, versions match across `config.yaml`/`VERSION.txt`,
+  no app keys anywhere in the tree, safe defaults (MCP off, standby 5 min, log level info), and every
+  command the panel can send is both handled and subscribed by the bridge.
+
+
+## 0.26.95 — the Talk button now tells you why it failed, and clearer icons
+- **Fixed the real reason Talk looked dead**: in native fullscreen the browser paints *only* the
+  fullscreen element, so the explanation message was being drawn behind it and nobody ever saw it.
+  Messages now appear inside the fullscreen view — and a failed attempt also **flashes the button red**,
+  so it can never fail silently again.
+- Clearer icons in the fullscreen bar: the laser is now a **🎯** (was an anonymous dot) and returning
+  to the charger is a **🔌** (was a bare house outline), both with plain-language tooltips.
+
+
+## 0.26.94 — fullscreen controls fit a phone held sideways, and Talk explains itself
+- **Layout**: the fullscreen bar was sized for a desktop window, so on a phone (especially in
+  landscape, where there is very little height) the buttons crowded each other and the picture. The
+  bar and its buttons now shrink on short/narrow screens and stay on one line.
+- **Talk**: the button used to fail with a vague "microphone blocked". Browsers only give access to
+  the microphone in a **secure context**, so opening Home Assistant over plain `http://<ip>:8123`
+  makes it impossible — there isn't even a permission prompt. The panel now says exactly that, and
+  distinguishes "permission denied" from "no microphone" from "needs HTTPS".
+
+
 ## 0.26.93 — a short demo clip in the README
 - Added an animated demo of the robot being driven from a phone, next to the feature list, so the
   project shows what it does in the first two seconds. (Trimmed and optimised to ~3 MB.)
