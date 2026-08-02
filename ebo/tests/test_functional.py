@@ -147,8 +147,38 @@ def test_telemetry_undocked(bridge):
     assert s["docked"] == "false"
 
 
+def test_docked_falls_back_to_charge_status(bridge):
+    """The robot has been seen charging while still reporting adapterStatus -1 — 'docked: false'
+    next to 'charging: true' is a contradiction the dashboard shouldn't show."""
+    bridge.telemetry = {"battery": {"percentage": 50, "adapterStatus": -1, "chargeStatus": 2},
+                        "status": {}}
+    bridge._publish_telemetry()
+    s = bridge.mqtt.last_state()
+    assert s["charging"] == "true"
+    assert s["docked"] == "true"
+
+
 def test_task_labels(bridge):
     assert bridge._task_label([{"taskId": 7}], {}, {"adapterStatus": -1}) == "on a call"
     assert bridge._task_label([], {"safeMode": 1}, {"adapterStatus": -1}) == "guard mode"
     assert bridge._task_label([], {}, {"adapterStatus": 0, "percentage": 80}) == "charging"
     assert bridge._task_label([], {}, {"adapterStatus": -1}) == "idle"
+
+
+# ---- write-only settings survive a restart (they'd otherwise show "unknown" in HA) ----
+def test_write_only_choices_persist_across_restart(bridge, B_mod, monkeypatch, tmp_path):
+    monkeypatch.setenv("EBO_DATA_DIR", str(tmp_path))
+    br = B_mod.Bridge(bridge.s, {"host": "h", "port": 1883})
+    br.mqtt = bridge.mqtt
+    br.connected = True
+    br.send = lambda mid, data=None: None
+    deliver(br, "ebo/eyes/set", "Clock 1")
+    deliver(br, "ebo/image_style/set", "Soft")
+
+    fresh = B_mod.Bridge(bridge.s, {"host": "h", "port": 1883})   # simulates an add-on restart
+    fresh.mqtt = bridge.mqtt
+    fresh.connected = True
+    fresh._publish_telemetry()
+    s = fresh.mqtt.last_state()
+    assert s["eyes"] == "Clock 1"
+    assert s["image_style"] == "Soft"

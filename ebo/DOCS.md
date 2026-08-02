@@ -110,8 +110,10 @@ the **EBO** sidebar entry. From one place you can:
 
 Each robot is a **distinct device under the EBO integration** (named after the robot), with a
 **live camera** and all entities (battery, Wi-Fi, charging, camera switch, wake/standby/laser/dock,
-video quality, speed, volume, eyes…). **No MQTT is involved** in your Home Assistant: the integration
-reads everything from the add-on's HTTP API. (Internally the add-on uses a private broker on
+video quality, speed, the two volumes, eyes…). Settings you set once — the volumes, image style,
+eyes, driving mode, collision avoidance — live in the device's **Configuration** section, so the
+main list stays the controls you use while driving. **No MQTT is involved** in your Home Assistant:
+the integration reads everything from the add-on's HTTP API. (Internally the add-on uses a private broker on
 localhost as glue between its processes — you never see it, and no Mosquitto is required.)
 
 The **video** is a low-latency RTSP stream (H.265 → H.264) on port **8554**; the integration plays

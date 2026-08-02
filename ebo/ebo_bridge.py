@@ -192,7 +192,13 @@ class Bridge:
         self.routes = []                 # [(routeName, id)] from the robot
         self.patrol_choice = PATROL_AUTO  # currently selected patrol route
         self.listen_on = True            # robot mic -> us (102001); you can switch it off
-        self.eyes_choice = None          # last eyes style we set (write-only on the robot)
+        # The robot never reports these back, so a restart would leave the selects on "unknown".
+        # We remember what we last set, on disk, and replay it into the published state.
+        self._ui_path = os.path.join(os.environ.get("EBO_DATA_DIR", "/data"), "ui_choices.json")
+        self._ui = self._ui_load()
+        self.eyes_choice = self._ui.get("eyes")   # last eyes style we set (write-only on the robot)
+        if self._ui.get("imageStyle") is not None:
+            self.settings["imageStyle"] = self._ui["imageStyle"]
         self._last_activity = time.time()   # last user command (drives auto-standby)
         self._route_rec = False          # True while recording a route (teach-by-driving)
         self._route_pending = None       # RouteDataInfo from 103206, awaiting a name + save
@@ -1746,8 +1752,9 @@ class Bridge:
             elif topic.endswith("/image_style/set"):
                 iv = IMAGE_STYLE_MAP.get(payload, 0)
                 self.send(OP_IMAGE_STYLE, {"imageStyle": iv})
-                # robot never echoes this field → reflect intent optimistically
+                # robot never echoes this field → reflect intent optimistically, and remember it
                 self.settings["imageStyle"] = iv
+                self._ui_save(imageStyle=iv)
                 self._publish_telemetry()
             elif topic.endswith("/night_vision/set"):
                 self.send(OP_NIGHT_MODE, {"shootMode": NIGHT_MODE_MAP.get(payload, 0)})
@@ -1757,6 +1764,7 @@ class Bridge:
                 mode, style = EYES_STYLES.get(payload, (1, 1))
                 if payload in EYES_STYLES:
                     self.eyes_choice = payload      # so the UI can show what's selected
+                    self._ui_save(eyes=payload)
                 self.send(OP_EYES, {
                     "status": 0, "mode": mode,
                     "dynamicEyes": {"autoFollow": False, "styleId": style if mode == 1 else 1},
@@ -1879,7 +1887,10 @@ class Bridge:
             "sd_total": gb(sd.get("capacityBytes")),
             "storage_free": gb(stor.get("availableBytes")),
             # dock / guard
-            "docked": "true" if b.get("adapterStatus", -1) != -1 else "false",
+            # adapterStatus alone is unreliable (it reported -1 while the robot was visibly on the
+            # base and reporting chargeStatus) — so trust either signal, like _check_sleep_on_dock.
+            "docked": ("true" if (b.get("adapterStatus", -1) != -1 or b.get("chargeStatus"))
+                       else "false"),
             "safe_mode": "true" if stt.get("safeMode") else "false",
             "task": self._task_label(t.get("tasks"), stt, b),
             # device info (101004)
@@ -1890,12 +1901,34 @@ class Bridge:
         }
         self.mqtt.publish("%s/state" % NODE, json.dumps(payload), retain=True)
 
+    def _ui_load(self):
+        try:
+            with open(self._ui_path, encoding="utf-8") as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}          # missing or corrupt: start clean, it's only a UI convenience
+
+    def _ui_save(self, **kw):
+        """Remember a write-only setting across restarts (eyes style, image style).
+        Written atomically: a half-written file here would make the next boot lose both choices."""
+        self._ui.update(kw)
+        tmp = self._ui_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._ui, f)
+            os.replace(tmp, self._ui_path)
+        except Exception as e:
+            log("could not persist UI choices: %s" % e)
+
     _TASK_LABELS = {1: "moving", 6: "AI tracking", 7: "on a call", 8: "shared view",
                     9: "guard mode", 10: "charging", 11: "upgrading"}
 
     def _task_label(self, tasks, stt, b):
         """Human-readable current activity from the tasks[] array / status flags."""
-        if b.get("adapterStatus", -1) != -1 and (b.get("percentage") or 0) < 100:
+        # same rule as the docked flag: adapterStatus alone misses some charging states
+        if ((b.get("adapterStatus", -1) != -1 or b.get("chargeStatus"))
+                and (b.get("percentage") or 0) < 100):
             base = "charging"
         else:
             base = "idle"

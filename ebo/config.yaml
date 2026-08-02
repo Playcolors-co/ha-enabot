@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial)
-version: "0.26.96"
+version: "0.26.99"
 slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot

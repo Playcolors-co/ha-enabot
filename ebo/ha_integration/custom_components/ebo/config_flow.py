@@ -67,11 +67,12 @@ class EboConfigFlow(ConfigFlow, domain=DOMAIN):
         return data
 
     async def _spawn_new(self, api: str, token: str) -> int:
-        """Start an import flow for every robot that isn't configured yet. Returns how many."""
+        """Start an import flow for every robot that isn't configured yet. Returns how many,
+        or -1 if the add-on's API couldn't be reached (a different problem than 'nothing new')."""
         try:
             robots = await _fetch_robots(self.hass, api, token)
         except Exception:  # noqa: BLE001
-            return 0
+            return -1
         known = self._async_current_ids()
         new = 0
         for robot in robots:
@@ -98,6 +99,8 @@ class EboConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="addon_not_found")
         api, token = endpoint
         new = await self._spawn_new(api, token)
+        if new < 0:
+            return self.async_abort(reason="cannot_connect")
         if new == 0:
             return self.async_abort(reason="no_new_robots")
         return self.async_abort(reason="setup_started")

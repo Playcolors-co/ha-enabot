@@ -127,3 +127,31 @@ def test_config_defaults_have_no_credentials():
 def test_password_field_is_masked():
     cfg = yaml.safe_load(open(os.path.join(ADDON, "config.yaml"), encoding="utf-8"))
     assert cfg["schema"]["password"] == "password"   # masked input, not plain str
+
+
+# ---- data API token guard (port 8098 is reachable from the whole LAN) ----
+def _authed_with(monkeypatch, configured_token, sent_header):
+    """Call panel.Handler._authed without opening a socket."""
+    import importlib
+    monkeypatch.setenv("EBO_API_TOKEN", configured_token)
+    panel = importlib.reload(importlib.import_module("panel"))
+
+    class _H(panel.Handler):
+        def __init__(self):          # skip BaseHTTPRequestHandler's socket setup
+            self.headers = {} if sent_header is None else {"X-Enabot-Token": sent_header}
+            self.server = type("S", (), {"require_token": True})()
+
+    return panel.Handler._authed(_H())
+
+
+def test_api_token_required(monkeypatch):
+    assert _authed_with(monkeypatch, "s3cret", "s3cret") is True
+    assert _authed_with(monkeypatch, "s3cret", "wrong") is False
+    assert _authed_with(monkeypatch, "s3cret", None) is False
+
+
+def test_api_refuses_everything_when_no_token_configured(monkeypatch):
+    """If /data wasn't writable at boot the token can end up empty — an empty header must NOT
+    then authenticate, or the robot would be drivable by anyone on the network."""
+    assert _authed_with(monkeypatch, "", "") is False
+    assert _authed_with(monkeypatch, "", None) is False

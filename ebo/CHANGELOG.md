@@ -1,5 +1,60 @@
 # Changelog — Enabot integration
 
+## 0.26.99 — hardening pass before the public release
+- **"Keep trying or use HLS?" actually works now.** The question the player asks when the fluid
+  video doesn't come up was never drawn: the code called a function that didn't exist, so instead of
+  asking, the video stopped there — no question, no fallback, just "Connecting…". A test now fails
+  the build if the panel calls a function nobody wrote.
+- **Fixed a leaked video session on the robot page.** Each time the robot fell asleep and woke up,
+  the page was rebuilt and the previous stream kept running in the background, one per cycle.
+- **The robot page can recover its own video.** Its HLS path was wired to the fullscreen view, so a
+  network hiccup there never retried and its error messages went to an invisible element.
+- **The data API refuses to answer without a token.** If the token file couldn't be written at boot
+  the token ended up empty, and an empty header would then have been accepted — on a port that is
+  reachable from your whole network. It now refuses everything until a token exists, and compares it
+  in constant time.
+- **Home Assistant recovers if the add-on's API token or hostname changes.** Those were stored when
+  the robot was added; if they changed, every entity stayed unavailable with no way back short of
+  removing and re-adding the device. They're now re-read at startup.
+- Adding robots when the add-on is unreachable now says so, instead of "no new robots to add".
+- The activity label ("charging") uses the same corrected signal as the docked flag.
+
+## 0.26.98 — Home Assistant entities: peer review and hardening
+- **No more "unknown" selects.** *Image style* and *Eyes* are write-only on the robot (it never
+  reports them back), so they showed as unknown after every restart. The add-on now remembers what
+  you last chose and reports it, so both selects show the real value.
+- **"Docked" no longer contradicts "Charging".** Docked was derived from a single field the robot
+  doesn't always fill in; it now also trusts the charge status, the way the auto-sleep logic already did.
+- **Wi-Fi signal is a real measurement.** It was a bare number with no unit; it now has dBm and a
+  signal-strength device class, so Home Assistant graphs it and keeps its history. Battery gained
+  long-term statistics for the same reason.
+- **Entities go unavailable when the add-on does.** They used to keep showing the last known value
+  even while the add-on was unreachable — only *Online* stays available now, so it can report offline.
+- **A failed command is reported as failed.** Commands that the add-on refused (or never received)
+  were logged and forgotten, so a toggle would flip while nothing happened. They now raise a visible
+  error in Home Assistant.
+- **New entities:** *Speaker volume* (the second volume, previously only in the panel) and *Docked*.
+- Settings (volumes, image style, eyes, driving mode, collision avoidance) moved to the device's
+  **Configuration** section, so the main controls list is the things you actually use while driving.
+- The device now shows its **firmware version and serial number**, and the camera shares the exact
+  same device record as the other entities.
+- Fixed a leak on the robot page: when the robot fell asleep and woke up, the page rebuilt and left
+  the previous video session running in the background, one per cycle.
+- *Upgrading:* Home Assistant may report that the Wi-Fi sensor's unit changed (it had none before).
+  Developer tools → **Statistics** offers a one-click fix; until then its history is paused.
+
+## 0.26.97 — smooth video on the robot page, and it asks before downgrading
+- **The robot page now shows the same live stream as the drive view.** It used to refresh snapshots,
+  which looked like a slideshow; it now plays the real WebRTC video, so the picture is as smooth as in
+  fullscreen. While the robot sleeps nothing is played and the last frame + wake button stay as they
+  were. (The snapshot refresh also stops while the live video covers it — each one cost an ffmpeg grab.)
+- **It asks before falling back to HLS.** On a cold start the robot needs a few seconds to publish its
+  camera, and the panel used to give up and switch to the slower HLS **even on the LAN**. Now, when the
+  fluid path doesn't come up, you get a choice: **Keep trying** or **Use HLS**. From remote — where
+  WebRTC genuinely can't work — it still switches by itself without bothering you.
+- The robot page's connection line now says which path is actually in use.
+
+
 ## 0.26.96 — the test suite tells the truth again
 - A full review before this release turned up that **6 tests had been failing silently**, and not
   because of a real defect:

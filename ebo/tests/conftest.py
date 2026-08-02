@@ -8,7 +8,12 @@ parsing, discovery, signing — can be unit-tested on any platform, no robot, no
 import json
 import os
 import sys
+import tempfile
 import types
+
+# The bridge persists write-only UI choices (eyes, image style) under /data. Point that at a temp
+# dir so tests never touch a real add-on data directory.
+os.environ.setdefault("EBO_DATA_DIR", tempfile.mkdtemp(prefix="ebo-test-"))
 
 HERE = os.path.dirname(__file__)
 ADDON = os.path.dirname(HERE)
@@ -31,6 +36,10 @@ elog.log = lambda *a, **k: None
 elog.raw = lambda *a, **k: None
 
 # ---- paho.mqtt.client ----
+# ---- segno: only used by panel.py to draw the pairing QR ----
+segno = _mod("segno")
+segno.make = lambda *a, **k: types.SimpleNamespace(save=lambda *a, **k: None)
+
 paho = _mod("paho")
 pmq = _mod("paho.mqtt")
 pmc = _mod("paho.mqtt.client")

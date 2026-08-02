@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -62,6 +63,7 @@ class EboObstacleSwitch(EboEntity, SwitchEntity):
     reflects the real state."""
 
     _attr_icon = "mdi:wall"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry, "avoid_obstacle")

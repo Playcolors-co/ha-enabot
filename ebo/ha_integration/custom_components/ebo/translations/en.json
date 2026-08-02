@@ -23,7 +23,8 @@
       "no_new_robots": "No new robots to add (they're already set up, or none are paired yet).",
       "addon_not_found": "Couldn't reach the EBO add-on. Make sure it's installed and running.",
       "invalid_discovery": "The add-on sent an invalid discovery message.",
-      "already_configured": "This robot is already added."
+      "already_configured": "This robot is already added.",
+      "cannot_connect": "Found the EBO add-on but couldn't talk to its API. Is the add-on started?"
     }
   }
 }

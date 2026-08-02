@@ -8,6 +8,7 @@ from datetime import timedelta
 import async_timeout
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -56,12 +57,23 @@ class EboCoordinator(DataUpdateCoordinator):
             return None
 
     async def cmd(self, node: str, suffix: str, payload="") -> None:
-        """Send a command to a robot via the add-on API."""
+        """Send a command to a robot via the add-on API.
+
+        Raises HomeAssistantError when the add-on refuses or is unreachable: silently swallowing it
+        made a dead command look like a successful one (the toggle flipped, the robot didn't move).
+        """
         try:
             async with async_timeout.timeout(10):
-                await self._session.post(
+                async with self._session.post(
                     self._api + "/api/cmd", headers=self._headers,
-                    json={"node": node, "suffix": suffix, "payload": str(payload)})
+                    json={"node": node, "suffix": suffix, "payload": str(payload)}) as r:
+                    if r.status >= 400:
+                        raise HomeAssistantError(
+                            "EBO add-on refused %s (HTTP %s)" % (suffix, r.status))
+        except HomeAssistantError:
+            raise
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("EBO command %s/%s failed: %s", node, suffix, err)
-        await self.async_request_refresh()
+            raise HomeAssistantError("EBO add-on unreachable: %s" % err) from err
+        finally:
+            await self.async_request_refresh()
