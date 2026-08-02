@@ -161,7 +161,7 @@ def _restart_self():
         req = urllib.request.Request("http://supervisor/addons/self/restart",
                                      data=b"", method="POST")
         req.add_header("Authorization", "Bearer " + SUPERVISOR_TOKEN)
-        urllib.request.urlopen(req, timeout=30).read()
+        urllib.request.urlopen(req, timeout=30).read()  # nosec B310 - fixed http:// URL to the Supervisor API
     except Exception as e:
         log("[panel] self-restart failed:", e)
 
@@ -368,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, b"", "text/plain")
         url = "http://127.0.0.1:%s/%s" % (port, sub)
         try:
-            with urllib.request.urlopen(url, timeout=20) as r:
+            with urllib.request.urlopen(url, timeout=20) as r:  # nosec B310 - literal http://127.0.0.1, port checked against the HLS range above
                 data = r.read()
                 ctype = r.headers.get("Content-Type", "application/octet-stream")
             self.send_response(200)
@@ -397,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
         req = urllib.request.Request(url, data=offer, method="POST")
         req.add_header("Content-Type", "application/sdp")
         try:
-            r = urllib.request.urlopen(req, timeout=15)
+            r = urllib.request.urlopen(req, timeout=15)  # nosec B310 - literal http://127.0.0.1, port checked against the WebRTC range above
             status, answer, ctype = r.getcode(), r.read(), \
                 r.headers.get("Content-Type", "application/sdp")
         except urllib.error.HTTPError as e:
@@ -1910,12 +1910,12 @@ def main():
     except Exception as e:
         log("[panel] MQTT connect failed:", e)
     # token-guarded data API for the native integration (host-mapped port)
-    api = ThreadingHTTPServer(("0.0.0.0", API_PORT), Handler)
+    api = ThreadingHTTPServer(("0.0.0.0", API_PORT), Handler)  # nosec B104 - inside the add-on container; Supervisor decides what is mapped out, and this port needs a token
     api.require_token = True
     threading.Thread(target=api.serve_forever, daemon=True).start()
     log("[panel] data API on :%d (token-guarded)" % API_PORT)
     # Ingress UI (authenticated by HA)
-    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)  # nosec B104 - inside the add-on container; reached only through HA Ingress, which authenticates
     srv.require_token = False
     log("[panel] Ingress UI on :%d" % PORT)
     srv.serve_forever()

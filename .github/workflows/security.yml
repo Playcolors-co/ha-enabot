@@ -1,0 +1,23 @@
+name: security
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  scan:
+    name: Lint + SAST + dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff bandit pip-audit
+      - name: Lint (ruff)
+        working-directory: ebo
+        run: ruff check .
+      - name: Security SAST (bandit, medium+)
+        working-directory: ebo
+        run: bandit -r . --ini .bandit -ll
+      - name: Dependency CVE audit (pip-audit)
+        working-directory: ebo
+        run: pip-audit -r tests/requirements-runtime.txt

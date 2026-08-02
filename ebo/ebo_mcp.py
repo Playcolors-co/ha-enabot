@@ -215,4 +215,4 @@ if __name__ == "__main__":
     if not TOKEN:
         raise SystemExit("[mcp] refusing to start without EBO_API_TOKEN (unauthenticated driving is unsafe)")
     print("[mcp] EBO MCP server on http://0.0.0.0:%d (bearer-token auth)" % PORT, flush=True)
-    mcp.run(transport="http", host="0.0.0.0", port=PORT)
+    mcp.run(transport="http", host="0.0.0.0", port=PORT)  # nosec B104 - inside the add-on container; bearer-token auth is enforced above

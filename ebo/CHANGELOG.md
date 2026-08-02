@@ -1,5 +1,15 @@
 # Changelog — Enabot integration
 
+## 0.26.100 — the build was red and nobody was looking
+- **The public repo's image build had been failing since 0.26.0.** It still pointed at the old
+  `ebo_air2` folder, renamed six releases ago, so every release since built nothing. Fixed, and the
+  test + security checks now run on the release repo too, not only on beta.
+- **The security scan couldn't even start.** It was invoked with the wrong flag for its own config
+  file, so it errored out instead of scanning. Fixed — and the findings it then reported are
+  reviewed and annotated one by one in the code (they are the container's own listening sockets and
+  calls to fixed local URLs), so the scan is green on facts, not by ignoring it.
+- No functional change to the add-on itself.
+
 ## 0.26.99 — hardening pass before the public release
 - **"Keep trying or use HLS?" actually works now.** The question the player asks when the fluid
   video doesn't come up was never drawn: the code called a function that didn't exist, so instead of
