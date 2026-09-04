@@ -49,13 +49,15 @@ They are the same for everyone (app-level constants, not per-user secrets), and 
 2. **Open it with jadx** — download from
    [github.com/skylot/jadx/releases](https://github.com/skylot/jadx/releases) (needs Java, e.g.
    [Adoptium](https://adoptium.net)). GUI: open `ebo.apk`. CLI: `jadx -d ebo-src ebo.apk`.
-3. **Open the class** `com.enabot.lib_ebo.netWork.ServerEncryptHelper`
-   (in jadx-gui: Ctrl/Cmd+Shift+F → search `ServerEncryptHelper`). Near the top it holds **two
-   16-character string constants** (the field names are obfuscated, e.g. `f24161b`):
-   - the one fed to the **AES cipher** for the request body → **`payload_key`**
-   - the one used to build the **`x-ebo-sign` signature** (SHA-256) → **`sign_key`**
-4. **Paste both** into this add-on's Configuration tab. If login fails with a signature error, you
-   probably swapped them — try the other way round.
+3. **`payload_key`** — open the class `com.enabot.lib_ebo.netWork.ServerEncryptHelper`
+   (in jadx-gui: Ctrl/Cmd+Shift+F → search `ServerEncryptHelper`). The **16-character string** fed to
+   the AES cipher is your `payload_key` (field names are obfuscated, e.g. `f24161b`).
+4. **`sign_key`** — on **older** app builds it's the second 16-char constant right next to it. On
+   **recent** builds it was moved into the native library **`libeboSignature.so`** (jadx won't show
+   it) → read it with **Frida** from your running app, or reverse the `.so` (Ghidra/IDA). Full steps
+   in the guide below.
+5. **Paste both** into this add-on's Configuration tab. If login fails with a signature error, the
+   `sign_key` is the one to re-check.
 
 📖 Full version with more detail:
 <https://github.com/Playcolors-co/ha-enabot/blob/main/ebo/docs/GET-APP-KEYS.md>

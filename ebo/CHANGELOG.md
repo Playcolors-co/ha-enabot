@@ -1,5 +1,13 @@
 # Changelog — Enabot integration
 
+## 0.26.102 — key-extraction guide updated for current app versions
+- **The "get your two app keys" guide now covers recent EBO HOME builds.** On newer versions of the
+  app the signing key was moved out of the Java code into the native library `libeboSignature.so`, so
+  a plain jadx search only turns up the `payload_key` — which is why recent extraction attempts came
+  up short. The guide (and DOCS) now split the two: `payload_key` via jadx as before, `sign_key` via
+  Frida from your own running app (or by reversing the `.so`) on recent builds.
+- Docs only — no functional change to the add-on. (Also carries a dev-only fix to `make_icon.py`.)
+
 ## 0.26.100 — the build was red and nobody was looking
 - **The public repo's image build had been failing since 0.26.0.** It still pointed at the old
   `ebo_air2` folder, renamed six releases ago, so every release since built nothing. Fixed, and the
