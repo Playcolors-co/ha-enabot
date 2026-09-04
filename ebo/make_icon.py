@@ -1,5 +1,10 @@
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import math
+import os
+
+# Save next to this script, wherever the tree lives — a hardcoded folder path went stale every time
+# the project was reorganized.
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 S = 4  # supersampling
 
@@ -78,7 +83,7 @@ def draw_ebo(size, with_bg=True):
 
 # icon 512
 icon=draw_ebo(512, with_bg=True).resize((512,512), Image.LANCZOS)
-icon.save("addon/ebo/icon.png")
+icon.save(os.path.join(HERE, "icon.png"))
 print("icon.png", icon.size)
 
 # wide logo with text
@@ -97,7 +102,7 @@ tx=(LH-20)*S2
 d.text((tx, 90*S2), "EBO Air 2", font=font(150), fill=(238,246,247,255))
 d.text((tx+4, 210*S2), "Home Assistant", font=font(64), fill=(64,232,232,255))
 logo=logo.resize((LW,LH), Image.LANCZOS)
-logo.save("addon/ebo/logo.png")
+logo.save(os.path.join(HERE, "logo.png"))
 print("logo.png", logo.size)
 
 # --- logo v2: teal background like the icon, white text ---
@@ -115,5 +120,5 @@ tx=(LH-10)*S2
 d.text((tx, 96*S2), "EBO Air 2", font=font(150), fill=(240,248,249,255))
 d.text((tx+4, 214*S2), "per Home Assistant", font=font(62), fill=(72,236,236,255))
 logo=logo.resize((LW,LH), Image.LANCZOS)
-logo.save("addon/ebo/logo.png")
+logo.save(os.path.join(HERE, "logo.png"))
 print("logo.png v2", logo.size)

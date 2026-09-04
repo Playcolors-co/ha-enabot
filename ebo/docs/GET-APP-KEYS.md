@@ -16,11 +16,17 @@ your own Home Assistant. Then you paste them into the add-on's Configuration tab
 
 | Tool | What for | Link |
 |---|---|---|
-| **jadx** (jadx-gui) | opens the app and shows its code | <https://github.com/skylot/jadx/releases> |
+| **jadx** (jadx-gui) | opens the app and shows its code — finds the `payload_key` | <https://github.com/skylot/jadx/releases> |
 | **A way to get the APK** | pull the app file off your phone | see step 1 |
 | *(optional)* **adb / platform-tools** | pull the APK over USB | <https://developer.android.com/tools/releases/platform-tools> |
+| *(recent app builds)* **Frida** | read the `sign_key` from the app's **native** library at runtime | <https://frida.re> |
 
 Java is required by jadx; if it complains, install a JDK (e.g. <https://adoptium.net>).
+
+> **Heads-up on app versions.** On older EBO HOME builds **both** keys sat in the Java code and jadx
+> alone was enough. On **recent builds the signing key was moved into a native library**
+> (`libeboSignature.so`), so jadx shows you only the `payload_key` — that's why a plain jadx search now
+> comes up short. Step 3 covers both cases.
 
 ---
 
@@ -53,27 +59,39 @@ If you get several files (`base.apk`, `split_*.apk`), the one you want is **`bas
 
 ## Step 3 — Find the keys
 
-The class that signs and encrypts the cloud requests is:
+### 3a — `payload_key` (with jadx)
+
+The class that encrypts the cloud request body is:
 
 ```
 com.enabot.lib_ebo.netWork.ServerEncryptHelper
 ```
 
-- In **jadx-gui**: press **Ctrl/Cmd + Shift + F** (search in code) and search for
-  `ServerEncryptHelper`, then open the class.
+- In **jadx-gui**: press **Ctrl/Cmd + Shift + F** (search in code), search for `ServerEncryptHelper`,
+  and open the class.
 - With the **CLI**: `grep -rn "class ServerEncryptHelper" ebo-src/sources/`
 
-Inside that class you'll find two constants near the top — the field names are obfuscated (something
-like `f24161b`, `f24162c`), but their **values are two 16-character strings**:
+Near the top you'll find a **16-character string** passed to the AES/cipher code — that's your
+**`payload_key`**. (Field names are obfuscated, e.g. `f24161b`.) On older builds you'll also see a
+second 16-char constant right next to it used to build the signature — on those builds that's your
+`sign_key` and you're done. On recent builds it isn't in the Java code any more → do **3b**.
 
-- the one used as the **AES key for the request body** → this is your **`payload_key`**
-- the one used to build the **request signature** (the `x-ebo-sign` header) → this is your **`sign_key`**
+### 3b — `sign_key` (recent builds: it's in the native library)
 
-If you're unsure which is which, look at how each constant is used in the same class: the one passed to
-the AES/cipher code is the payload key; the one concatenated into the string that gets hashed
-(SHA-256) is the sign key. Worst case, try one order — if login fails, swap them.
+On current EBO HOME versions the signing key lives in the native library **`libeboSignature.so`**, not
+in the Java code, so jadx won't show it. Two ways to get it, in order of ease:
 
-> Tip: both are exactly **16 characters** and contain punctuation. Copy them **exactly**, with no
+- **Frida (easiest).** With Frida attached to the running app, hook the app's signing routine and read
+  the value it uses (the app builds the `x-ebo-sign` header from it). This reads the key from **your
+  own** running app; nothing leaves your device.
+- **Reverse the `.so`.** Unzip the APK, take `lib/arm64-v8a/libeboSignature.so`, and open it in a
+  disassembler (Ghidra/IDA) to recover the constant.
+
+> Not sure you've got the right one? The `sign_key` is what builds the `x-ebo-sign` request signature
+> (an HMAC-SHA256). If the add-on logs a **signature error** on login, the `sign_key` is the one to
+> re-check.
+
+> Tip: both keys are exactly **16 characters** and contain punctuation. Copy them **exactly**, with no
 > added spaces, and don't let your editor "smart-quote" any character.
 
 ---
