@@ -182,3 +182,24 @@ def test_write_only_choices_persist_across_restart(bridge, B_mod, monkeypatch, t
     s = fresh.mqtt.last_state()
     assert s["eyes"] == "Clock 1"
     assert s["image_style"] == "Soft"
+
+
+def test_controls_held_during_cold_wake(bridge, monkeypatch):
+    """A control pressed while the robot is still waking (session not connected yet) must not be
+    lost: it is held and replayed once the session comes up. Movement is NOT held (no lurch on
+    wake). Establishing commands (camera/set) are never deferred — they bring the session up."""
+    bridge.connected = False
+    # the press triggers an auto-connect on a background thread — stub it so the test does no I/O
+    monkeypatch.setattr(bridge, "set_connected", lambda on: None)
+
+    deliver(bridge, "%s/laser/set" % N, "on")
+    assert (103051, {"laser": True}) not in bridge.sent      # not routed while waking
+    assert ("%s/laser/set" % N, "on") in bridge._deferred    # remembered instead
+
+    deliver(bridge, "%s/move/vector" % N, '{"ly":-60,"rx":0}')
+    assert all("/move/" not in t for t, _ in bridge._deferred)   # movement never queued
+
+    bridge.connected = True          # session is live now
+    bridge._flush_deferred()
+    assert (103051, {"laser": True}) in bridge.sent          # held control applied
+    assert bridge._deferred == []

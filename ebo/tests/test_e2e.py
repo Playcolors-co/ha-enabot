@@ -43,10 +43,23 @@ def test_e2e_rotate_and_select_on_wire(bridge_rtm):
     assert (102055, {"videoQuality": 3}) in ids
 
 
-def test_e2e_disconnected_sends_nothing(bridge_rtm):
+def test_e2e_disconnected_holds_then_applies_on_wake(bridge_rtm, monkeypatch):
+    """A control pressed while the master switch is OFF is NOT sent to a sleeping robot immediately;
+    it's held and the robot is woken, then the control is delivered once the session is live. (Stub
+    the auto-connect so the test does no network I/O.)"""
+    from conftest import _pump
+
+    monkeypatch.setattr(bridge_rtm, "set_connected", lambda on: None)
     bridge_rtm.connected = False           # master "connected" switch OFF
     deliver(bridge_rtm, "%s/laser/set" % N, "on")
-    assert bridge_rtm.rtm.sent == []       # guarded: nothing goes out
+    assert bridge_rtm.rtm.sent == []                              # nothing on the wire yet
+    assert ("%s/laser/set" % N, "on") in bridge_rtm._deferred     # held instead
+
+    bridge_rtm.connected = True            # session comes up
+    bridge_rtm._flush_deferred()
+    _pump(bridge_rtm)
+    assert any(m["id"] == 103051 and m["data"] == {"laser": True}
+               for _, m in bridge_rtm.rtm.sent)                   # held control delivered
 
 
 def test_e2e_telemetry_message_to_ha_state(bridge_rtm):

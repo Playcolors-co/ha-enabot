@@ -1,5 +1,21 @@
 # Changelog — Enabot integration
 
+## 0.26.103 — the speed slider actually changes the speed, and controls survive a cold wake
+- **"Movement speed" now really drives the robot faster or slower.** Manual driving goes at the
+  joystick vector's magnitude, and that was fixed at 60 — the speed slider only set a separate value
+  the robot ignores while you steer, so it always felt slow. The slider now sets the driving speed
+  directly, is remembered across reloads (it used to reset to 60 every time), and the confusing
+  duplicate "Joystick sensitivity" control is gone (it was the only one that actually worked).
+- **A control pressed right after waking the robot is no longer lost.** During the couple of seconds
+  the cloud session takes to come up, taps used to be dropped silently — you'd wake it, press
+  something and nothing happened. Those controls are now held and applied the moment the session is
+  live (movement is not held, to avoid a lurch on wake).
+- **Native crashes are now diagnosable.** A crash inside the Agora/TUTK SDK kills the bridge with no
+  Python traceback; run.sh just respawned it and you'd see the video and control drop mid-drive for
+  ~10-15 s. The bridge now dumps every thread's stack to `/data/ebo_faults.log` on a fatal signal
+  (it survives the respawn), and the restart line names the signal. Groundwork to fix the mid-drive
+  disconnects — no behaviour change yet.
+
 ## 0.26.102 — key-extraction guide updated for current app versions
 - **The "get your two app keys" guide now covers recent EBO HOME builds.** On newer versions of the
   app the signing key was moved out of the Java code into the native library `libeboSignature.so`, so

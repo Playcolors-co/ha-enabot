@@ -735,7 +735,7 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
     <label>Driving mode</label>
     <select id="fs-dm" onchange="if(fsNode)cmd(fsNode,'move_mode/set',this.value)">${''}</select>
     <label>Movement speed (<span id="fs-mspd-v">—</span>)</label>
-    <input id="fs-mspd" type="range" min="1" max="100" value="50" onchange="if(fsNode)cmd(fsNode,'speed/set',this.value)" oninput="document.getElementById('fs-mspd-v').textContent=this.value">
+    <input id="fs-mspd" type="range" min="1" max="100" value="50" oninput="setDriveSpeed(this.value)" onchange="setDriveSpeed(this.value);if(fsNode)cmd(fsNode,'speed/set',this.value)">
     <label class="tgl"><span>Collision avoidance</span>
       <input type="checkbox" id="fs-avoid" onchange="if(fsNode)cmd(fsNode,'avoid_obstacle/set',this.checked?'on':'off')"></label>
   </div>
@@ -764,8 +764,6 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
         <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
       </select>
     </label>
-    <label>Joystick sensitivity (<span id="fs-spd-v">60</span>)</label>
-    <input id="fs-spd" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value;document.getElementById('fs-spd-v').textContent=this.value">
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn pri" onclick="document.getElementById('fsopts').close()">Done</button></div>
   <div class="note">More actions (talk, listen, snapshot) coming soon.</div>
@@ -1174,7 +1172,17 @@ function driveNow(n){ SEL=n; render(true); bg(n,'camera/set','on'); setTimeout((
 // --- driving: hold direction(s) to move, release to stop. MULTIPLE directions COMBINE into one
 // analog vector (move/vector carries ly=forward/back AND rx=turn together), so forward+right drives
 // a smooth diagonal instead of only the last key winning. A watchdog re-sends while held. ---
-let driveSpeed=60, moveNode=null, moveTimer=null;
+// driveSpeed is the manual-driving speed: the robot drives at the VECTOR MAGNITUDE, so this value
+// IS the speed (the separate moveSpeed/OP_SET_SPEED does nothing for live vector driving — that was
+// the "changing speed does nothing, always slow" bug). Persisted so it survives a reload (it used to
+// reset to 60 every time). Set through setDriveSpeed() so every speed slider stays in sync.
+let driveSpeed=Math.max(1,Math.min(100,+localStorage.getItem('ebo_speed')||50)), moveNode=null, moveTimer=null;
+function setDriveSpeed(v){
+  driveSpeed=Math.max(1,Math.min(100,+v||50));
+  try{localStorage.setItem('ebo_speed',driveSpeed);}catch(e){}
+  document.querySelectorAll('#fs-mspd,#d-mspd').forEach(el=>{ if(el) el.value=driveSpeed; });
+  const a=document.getElementById('fs-mspd-v'); if(a) a.textContent=driveSpeed;
+}
 const pressed=new Set();          // currently-held directions (keyboard and/or D-pad)
 function sendVec(node,ly,rx,hold,buttons){
   fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -1330,8 +1338,6 @@ function openFsSettings(){
   const d=document.getElementById('fsopts'); const r=ROBOTS.find(x=>x.node===fsNode)||{}, st=r.state||{};
   // Driving tab: driving mode, movement speed, collision avoidance
   document.getElementById('fs-dm').innerHTML=opt(DM, st.move_mode);
-  document.getElementById('fs-mspd').value=st.speed??50;
-  document.getElementById('fs-mspd-v').textContent=st.speed??'—';
   document.getElementById('fs-avoid').checked = st.avoid_obstacle==='true';
   // Camera tab: night vision, video quality
   document.getElementById('fs-nv').innerHTML=opt(NV, st.night_vision);
@@ -1342,9 +1348,10 @@ function openFsSettings(){
   document.getElementById('fs-svol-v').textContent=sv??'—';
   document.getElementById('fs-cvol').value=st.talkback_volume??50;
   document.getElementById('fs-cvol-v').textContent=st.talkback_volume??'—';
+  // Driving tab: the speed slider reflects the persisted manual-driving speed
+  document.getElementById('fs-mspd').value=driveSpeed;
+  document.getElementById('fs-mspd-v').textContent=driveSpeed;
   // Controls tab: our joystick config
-  document.getElementById('fs-spd-v').textContent=driveSpeed;
-  d.querySelector('#fs-spd').value=driveSpeed;
   document.getElementById('fs-ctrl').value=fsCtrlMode;
   document.getElementById('fs-swap').checked=fsDualSwap;
   document.getElementById('fs-joyside').value=fsJoySide;
@@ -1767,8 +1774,8 @@ function detailView(r){
     </div>
     <div class="sec"><h4>Driving</h4>
       <label>Driving mode</label><select onchange="cmd('${r.node}','move_mode/set',this.value)">${opt(DM,st.move_mode)}</select>
-      <label>Movement speed (${st.speed??'—'})</label>
-      <input type="range" min="1" max="100" value="${st.speed??50}" onchange="cmd('${r.node}','speed/set',this.value)">
+      <label>Movement speed (this is how fast it drives)</label>
+      <input id="d-mspd" type="range" min="1" max="100" value="${driveSpeed}" oninput="setDriveSpeed(this.value)" onchange="setDriveSpeed(this.value);cmd('${r.node}','speed/set',this.value)">
       <label class="tgl"><span>Collision avoidance</span>
         <input type="checkbox" ${st.avoid_obstacle==='true'?'checked':''} onchange="cmd('${r.node}','avoid_obstacle/set',this.checked?'on':'off')"></label>
     </div>

@@ -252,7 +252,11 @@ run_robot() {
       echo "[add-on] robot ${id:-single} crashed ${crashes}× with A/V — control only."
       v=0; a=0; crashes=0
     fi
-    echo "[add-on] bridge (${id:-single}) exited (rc=${rc}), restarting in 15s…"
+    if [ "$rc" -ge 128 ]; then
+      echo "[add-on] bridge (${id:-single}) exited (rc=${rc} = signal $((rc-128)) — likely a native SDK crash; see /data/ebo_faults.log for the Python stack), restarting in 15s…"
+    else
+      echo "[add-on] bridge (${id:-single}) exited (rc=${rc}), restarting in 15s…"
+    fi
     sleep 15 & wait $! || true
   done
 }
