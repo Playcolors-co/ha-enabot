@@ -24,7 +24,9 @@ import json
 import os
 import subprocess
 import sys
+import faulthandler
 import queue
+import tempfile
 import threading
 import time
 
@@ -200,6 +202,13 @@ class Bridge:
         if self._ui.get("imageStyle") is not None:
             self.settings["imageStyle"] = self._ui["imageStyle"]
         self._last_activity = time.time()   # last user command (drives auto-standby)
+        # Cold-wake buffer: a control pressed during the ~2-5 s while the session is still coming up
+        # used to be dropped silently by send() — you'd wake the robot, tap a control and nothing
+        # happened. Hold the LATEST such intent and replay it the moment the session is live. Movement
+        # is deliberately NOT held (a queued lurch after the robot wakes is unwanted).
+        self._deferred = []
+        self._deferred_lock = threading.Lock()
+        self._connecting = False
         self._route_rec = False          # True while recording a route (teach-by-driving)
         self._route_pending = None       # RouteDataInfo from 103206, awaiting a name + save
         # Route/patrol support is model-dependent: the EBO Air 2 firmware ignores these opcodes (the
@@ -944,6 +953,44 @@ class Bridge:
         except Exception as e:
             log("[wake] rejoin failed:", e)
 
+    def _ensure_connecting(self):
+        """Bring the session up (once) after a control was pressed while the robot was asleep, so the
+        press isn't a no-op. Runs the connect off the MQTT receive thread; _flush_deferred (called at
+        the end of set_connected) then replays whatever was held."""
+        if self.connected or self._connecting:
+            return
+        self._connecting = True
+
+        def _go():
+            try:
+                self.set_connected(True)
+            except Exception as e:
+                log("[wake] auto-connect failed:", e)
+            finally:
+                self._connecting = False
+
+        threading.Thread(target=_go, daemon=True).start()
+
+    def _flush_deferred(self):
+        """Replay the controls held during the cold-wake window, now that the session is live."""
+        with self._deferred_lock:
+            pending, self._deferred = self._deferred, []
+        if not pending:
+            return
+        log("[wake] session up — replaying %d control(s) held during wake" % len(pending))
+
+        class _M:
+            __slots__ = ("topic", "payload")
+
+        for t, p in pending:
+            m = _M()
+            m.topic = t
+            m.payload = p.encode() if isinstance(p, str) else p
+            try:
+                self._on_mqtt_message(self.mqtt, None, m)
+            except Exception as e:
+                log("[wake] replay failed:", e)
+
     def set_connected(self, on):
         """Master session switch. OFF: leave the Agora session so the robot can sleep (no
         control/telemetry). ON: reconnect. MQTT/entities stay up throughout."""
@@ -970,6 +1017,8 @@ class Bridge:
                 self.send(OP_GET_ROUTES)
             except Exception as e:
                 log("[!] reconnect failed:", e)
+            # Session is live now — apply anything the user pressed while it was waking.
+            self._flush_deferred()
         else:
             self.connected = False
             log("[*] disconnecting session — robot can sleep")
@@ -1621,6 +1670,19 @@ class Bridge:
         if ("/move" in topic or topic.endswith("/joystick")) and getattr(self, "_sleep_on_dock", 0):
             self._sleep_on_dock = 0
             log("[dock] driving again — cancelling the sleep-on-dock")
+        # Cold-wake: the session isn't up yet. camera/set, connected/set and wake bring it up on
+        # their own, so let them through. ANY other control would just be dropped by send(), so start
+        # the wake and hold the intent to replay once we're live (see _flush_deferred). Movement is
+        # not held — only the last of each non-move control.
+        if not self.connected and not topic.endswith(
+                ("/camera/set", "/connected/set", "/wake")):
+            is_move = ("/move/" in topic) or topic.endswith("/joystick")
+            with self._deferred_lock:
+                self._deferred = [(t, p) for (t, p) in self._deferred if t != topic]
+                if not is_move:
+                    self._deferred.append((topic, payload))
+            self._ensure_connecting()
+            return
         try:
             if topic.endswith("/laser/set"):
                 self.send(OP_LASER, {"laser": payload.lower() in ("on", "true", "1")})
@@ -2089,7 +2151,33 @@ def discover_robots():
     return out
 
 
+_fault_fp = None   # keep the faulthandler file object alive for the whole process lifetime
+
+
+def _enable_fault_logging():
+    """A crash inside the native Agora/TUTK SDK kills us with NO Python traceback (SIGSEGV/SIGABRT/
+    SIGBUS/SIGFPE/SIGILL): run.sh just respawns us and the cause is invisible. faulthandler dumps
+    every thread's Python stack on a fatal signal. We prefer a PERSISTENT target under /data so the
+    dump survives the respawn and can be read after the fact; if that can't be opened we fall back to
+    stderr (still visible in the add-on log until it scrolls off)."""
+    global _fault_fp
+    try:
+        faulthandler.enable(all_threads=True)          # fallback target: stderr
+    except Exception:
+        pass
+    for d in (os.environ.get("EBO_DATA_DIR", "/data"), tempfile.gettempdir()):
+        try:
+            _fault_fp = open(os.path.join(d, "ebo_faults.log"), "a", buffering=1)
+            _fault_fp.write("=== bridge start %s pid=%d ===\n"
+                            % (time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid()))
+            faulthandler.enable(file=_fault_fp, all_threads=True)   # switch to the persistent file
+            return
+        except Exception:
+            continue
+
+
 def main():
+    _enable_fault_logging()
     # discovery mode (used by run.sh to enumerate robots): print "id\tname" per robot to the
     # real stdout, then exit.
     if os.environ.get("EBO_DISCOVER") == "1":
