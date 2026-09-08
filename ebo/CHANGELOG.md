@@ -1,5 +1,17 @@
 # Changelog — Enabot integration
 
+## 0.26.106 — fix the mid-drive crash (Agora SDK thread-safety)
+- **The bridge was crashing with a segfault while driving, and you'd lose video and control**
+  (the robot even kept coasting, because its watchdog died with the process). The captured stacks
+  showed the cause: the native Agora SDK is not thread-safe, and a session reconnect/teardown
+  (`connect_agora` / `_force_rejoin` / standby) running on one thread while another thread was
+  publishing a command, pushing audio or nudging a keyframe was a use-after-free → SIGSEGV.
+- **Fix:** every call into the SDK (RTM publish, RTC connect/disconnect, audio publish + PCM push,
+  keyframe requests, observer registration) now goes through a single lock, so a reconnect can never
+  overlap another SDK call. No feature change — just no more crash.
+- Crash dumps now also land in the Home Assistant config dir (`ebo_faults.log`) so any remaining
+  native fault is diagnosable.
+
 ## 0.26.105 — surface the crash stack where it can actually be read
 - The bridge already dumped a Python stack on a native SIGSEGV, but into the add-on's private
   `/data`, which the SSH/Terminal add-on can't reach. Those dumps now go to the Home Assistant

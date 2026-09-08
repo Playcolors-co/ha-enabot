@@ -263,7 +263,12 @@ class Bridge:
         self.host_ip = os.environ.get("EBO_HOST_IP", "")
         self._observers_registered = False
         self.svc = None                        # Agora service (global param handle lives here)
-        self._video_lock = threading.Lock()   # serialize setup/subscribe (2 callers race)
+        # ONE lock serializes EVERY call into the Agora SDK (self.rtc / self.rtm / audio PCM push).
+        # The SDK is not thread-safe: a session teardown/rebuild (connect_agora / _force_rejoin /
+        # standby) running on one thread while another thread publishes RTM, pushes audio or nudges a
+        # keyframe was a use-after-free → SIGSEGV mid-drive. RLock so the reconnect path can nest
+        # (connect_agora → _setup_video_pipeline) on the same thread without self-deadlock.
+        self._sdk_lock = threading.RLock()
 
     # ---------------- Agora ----------------
 
@@ -288,7 +293,8 @@ class Bridge:
                 log("[RTC] robot present:", uid)
                 if self.video_on and self.rtc:   # nudge a keyframe so video starts quickly
                     try:
-                        self.rtc.send_intra_request(str(uid))
+                        with self._sdk_lock:
+                            self.rtc.send_intra_request(str(uid))
                     except Exception:
                         pass
                 # AUDIO: verified on the real app (Frida) — the "listen" icon just calls
@@ -298,9 +304,10 @@ class Bridge:
                 if self.audio_enabled and self.rtc:
                     def _sub(tagnote):
                         try:
-                            lu = self.rtc.get_local_user()
-                            r1 = lu.subscribe_audio(str(uid))
-                            r2 = lu.subscribe_all_audio()
+                            with self._sdk_lock:
+                                lu = self.rtc.get_local_user()
+                                r1 = lu.subscribe_audio(str(uid))
+                                r2 = lu.subscribe_all_audio()
                             log("[audio] %s subscribe_audio(%s) rc=%s / subscribe_all_audio rc=%s"
                                 % (tagnote, uid, r1, r2))
                         except Exception as e:
@@ -334,15 +341,16 @@ class Bridge:
                 log("[RTM] login result:", err)
 
         if self.rtm is None:      # reuse an existing RTM login (telemetry) across RTC reconnects
-            self.rtm = create_rtm_client(RtmConfig(
-                app_id=s["app_id"], user_id=s["rtm_user"], use_string_user_id=1,
-                presence_timeout=300, heartbeat_interval=5, event_handler=RtmH(),
-            ))
-            r, _ = self.rtm.login(s["rtm_token"])
-            if r != 0:
-                raise RuntimeError("RTM login failed: %s" % self.rtm.get_error_reason(r))
-            self.rtm.subscribe(s["robot_rtm"],
-                               SubscribeOptions(with_message=True, with_presence=True))
+            with self._sdk_lock:
+                self.rtm = create_rtm_client(RtmConfig(
+                    app_id=s["app_id"], user_id=s["rtm_user"], use_string_user_id=1,
+                    presence_timeout=300, heartbeat_interval=5, event_handler=RtmH(),
+                ))
+                r, _ = self.rtm.login(s["rtm_token"])
+                if r != 0:
+                    raise RuntimeError("RTM login failed: %s" % self.rtm.get_error_reason(r))
+                self.rtm.subscribe(s["robot_rtm"],
+                                   SubscribeOptions(with_message=True, with_presence=True))
             log("[RTM] login and subscribe ok")
         else:
             log("[RTM] reusing existing login")
@@ -413,10 +421,11 @@ class Bridge:
                 audio_scenario=AudioScenarioType.AUDIO_SCENARIO_GAME_STREAMING)
         else:
             pcfg = RtcConnectionPublishConfig(is_publish_audio=False, is_publish_video=False)
-        self.rtc = svc.create_rtc_connection(ccfg, pcfg)
-        self.rtc.register_observer(RtcObs())
-        self._observers_registered = False
-        self.rtc.connect(s["rtc_token"], s["rtc_channel"], s["rtc_uid"])
+        with self._sdk_lock:
+            self.rtc = svc.create_rtc_connection(ccfg, pcfg)
+            self.rtc.register_observer(RtcObs())
+            self._observers_registered = False
+            self.rtc.connect(s["rtc_token"], s["rtc_channel"], s["rtc_uid"])
         for _ in range(20):
             if self.rtc_state:
                 break
@@ -428,10 +437,11 @@ class Bridge:
         if self.audio_enabled:
             try:
                 pt_opt = (os.environ.get("EBO_AUDIO_PT", "8") or "8").strip().lower()
-                cp = self.rtc.get_agora_parameter()
-                cp.set_parameters('{"che.audio.codec_unfallback":[0,8,9]}')
-                if pt_opt not in ("auto", ""):
-                    cp.set_parameters('{"che.audio.custom_payload_type":%d}' % int(pt_opt))
+                with self._sdk_lock:
+                    cp = self.rtc.get_agora_parameter()
+                    cp.set_parameters('{"che.audio.codec_unfallback":[0,8,9]}')
+                    if pt_opt not in ("auto", ""):
+                        cp.set_parameters('{"che.audio.custom_payload_type":%d}' % int(pt_opt))
                 log("[audio] codec params also set on connection after connect (pt=%s)" % pt_opt)
             except Exception as e:
                 log("[audio] connection set_parameters failed:", e)
@@ -451,7 +461,7 @@ class Bridge:
     def _setup_video_pipeline(self):
         """Create the RTSP pipeline and register the DECODED (YUV) frame observer on the
         connection — the SDK decodes H.265, we get YUV, ffmpeg re-encodes to H.264."""
-        with self._video_lock:
+        with self._sdk_lock:
             if self._observers_registered:
                 return
             try:
@@ -628,7 +638,8 @@ class Bridge:
             self._tx_run = True
         self._tx_start_t = time.time()
         try:
-            self.rtc.publish_audio()
+            with self._sdk_lock:
+                self.rtc.publish_audio()
             log("[audio-tx] publishing our audio track (mode=%s)" % self._tx_mode)
         except Exception as e:
             log("[audio-tx] publish_audio failed:", e)
@@ -640,7 +651,8 @@ class Bridge:
                 return
             self._tx_run = False
         try:
-            self.rtc.unpublish_audio()
+            with self._sdk_lock:
+                self.rtc.unpublish_audio()
         except Exception:
             pass
 
@@ -701,7 +713,8 @@ class Bridge:
                         if len(chunk) < frame_bytes:
                             chunk = chunk + b"\x00" * (frame_bytes - len(chunk))
                         try:
-                            sender.send_audio_pcm_data(self._mk_pcm(chunk))
+                            with self._sdk_lock:
+                                sender.send_audio_pcm_data(self._mk_pcm(chunk))
                         except Exception as e:
                             log("[talk] send error:", e)
                             break
@@ -730,7 +743,8 @@ class Bridge:
                 else:
                     chunk = silence
                 try:
-                    sender.send_audio_pcm_data(self._mk_pcm(chunk))
+                    with self._sdk_lock:
+                        sender.send_audio_pcm_data(self._mk_pcm(chunk))
                 except Exception:
                     pass
                 time.sleep(0.02)
@@ -793,7 +807,8 @@ class Bridge:
             self.video.start_feed()
             if self.robot_uid:
                 try:
-                    self.rtc.send_intra_request(self.robot_uid)
+                    with self._sdk_lock:
+                        self.rtc.send_intra_request(self.robot_uid)
                 except Exception:
                     pass
             log("[video] ON — camera stream: %s" % self._rtsp_url())
@@ -821,7 +836,8 @@ class Bridge:
             if self.video.frames == 0:
                 if self.robot_uid:
                     try:
-                        self.rtc.send_intra_request(self.robot_uid)
+                        with self._sdk_lock:
+                            self.rtc.send_intra_request(self.robot_uid)
                     except Exception:
                         pass
                 # the robot may still be waking from standby — re-send wake every ~8s
@@ -934,16 +950,17 @@ class Bridge:
             except Exception as e:
                 log("[wake] session refresh failed (continuing):", e)
         try:
-            if self.rtc:
+            with self._sdk_lock:
+                if self.rtc:
+                    try:
+                        self.rtc.disconnect()
+                    except Exception:
+                        pass
                 try:
-                    self.rtc.disconnect()
+                    if self.rtm:
+                        self.rtm.logout()
                 except Exception:
                     pass
-            try:
-                if self.rtm:
-                    self.rtm.logout()
-            except Exception:
-                pass
         except Exception:
             pass
         self.connected = True
@@ -1028,16 +1045,18 @@ class Bridge:
             except Exception:
                 pass
             try:
-                if self.rtc:
-                    self.rtc.disconnect()
+                with self._sdk_lock:
+                    if self.rtc:
+                        self.rtc.disconnect()
             except Exception:
                 pass
             # Full disconnect (known-good standby): also log out RTM so the robot reliably sleeps.
             # (The 0.26.32 "keep RTM" experiment is deferred to the auto-standby plan — reverted here
             # so the shipped standby stays reliable until we can verify the RTC-only behaviour.)
             try:
-                if self.rtm:
-                    self.rtm.logout()
+                with self._sdk_lock:
+                    if self.rtm:
+                        self.rtm.logout()
             except Exception:
                 pass
             self.rtm = None
@@ -1088,7 +1107,8 @@ class Bridge:
             return
         t0 = time.perf_counter()
         try:
-            r, _ = rtm.publish(self.s["robot_rtm"], payload, self._opts())
+            with self._sdk_lock:
+                r, _ = rtm.publish(self.s["robot_rtm"], payload, self._opts())
         except Exception as e:
             log("[!] publish %s error: %s" % (mid, e))
             return
@@ -2060,13 +2080,15 @@ class Bridge:
         except Exception:
             pass
         try:
-            if self.rtc:
-                self.rtc.disconnect()
+            with self._sdk_lock:
+                if self.rtc:
+                    self.rtc.disconnect()
         except Exception:
             pass
         try:
-            if self.rtm:
-                self.rtm.logout()
+            with self._sdk_lock:
+                if self.rtm:
+                    self.rtm.logout()
         except Exception:
             pass
 
@@ -2095,7 +2117,8 @@ class Bridge:
                     self.refresh_session()
                     # reconnect Agora with the new tokens
                     try:
-                        self.rtc.disconnect()
+                        with self._sdk_lock:
+                            self.rtc.disconnect()
                     except Exception:
                         pass
                     self.connect_agora()
