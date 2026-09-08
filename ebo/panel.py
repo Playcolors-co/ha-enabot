@@ -735,7 +735,7 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
     <label>Driving mode</label>
     <select id="fs-dm" onchange="if(fsNode)cmd(fsNode,'move_mode/set',this.value)">${''}</select>
     <label>Movement speed (<span id="fs-mspd-v">—</span>)</label>
-    <input id="fs-mspd" type="range" min="1" max="100" value="50" onchange="if(fsNode)cmd(fsNode,'speed/set',this.value)" oninput="document.getElementById('fs-mspd-v').textContent=this.value">
+    <input id="fs-mspd" type="range" min="1" max="100" value="50" oninput="setDriveSpeed(this.value)" onchange="setDriveSpeed(this.value);if(fsNode)cmd(fsNode,'speed/set',this.value)">
     <label class="tgl"><span>Collision avoidance</span>
       <input type="checkbox" id="fs-avoid" onchange="if(fsNode)cmd(fsNode,'avoid_obstacle/set',this.checked?'on':'off')"></label>
   </div>
@@ -764,8 +764,6 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
         <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
       </select>
     </label>
-    <label>Joystick sensitivity (<span id="fs-spd-v">60</span>)</label>
-    <input id="fs-spd" type="range" min="1" max="100" value="60" oninput="driveSpeed=+this.value;document.getElementById('fs-spd-v').textContent=this.value">
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn pri" onclick="document.getElementById('fsopts').close()">Done</button></div>
   <div class="note">More actions (talk, listen, snapshot) coming soon.</div>
@@ -810,6 +808,11 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
 <script>
 const B = window.location.pathname.replace(/\/$/,'');
 (function(){ const s=document.createElement('script'); s.src=B+'/hls.min.js'; s.async=true; document.head.appendChild(s); })();  // fluid HLS player
+// Safety net: while DRIVING we cap the robot's source quality so the 2-core re-encode always keeps
+// up — at full High (2304×1296→720p) the encoder falls behind under motion and the video drifts
+// seconds behind your steering. Medium keeps it in budget. Plain watching (not driving) is untouched
+// and still uses whatever quality you pick.
+const DRIVE_VQ='Medium';
 const VQ=["Low","Medium","High"], IS=["Standard","Vivid","Soft"],
       EY=["Dynamic 1","Dynamic 2","Dynamic 3","Dynamic 4","Dynamic 5","Dynamic 6","Clock 1","Clock 2","Custom"],
       DM=["Smooth","Racing"],   // driving mode (app: Driving Mode Smooth/Racing)
@@ -1174,7 +1177,17 @@ function driveNow(n){ SEL=n; render(true); bg(n,'camera/set','on'); setTimeout((
 // --- driving: hold direction(s) to move, release to stop. MULTIPLE directions COMBINE into one
 // analog vector (move/vector carries ly=forward/back AND rx=turn together), so forward+right drives
 // a smooth diagonal instead of only the last key winning. A watchdog re-sends while held. ---
-let driveSpeed=60, moveNode=null, moveTimer=null;
+// driveSpeed is the manual-driving speed: the robot drives at the VECTOR MAGNITUDE, so this value
+// IS the speed (the separate moveSpeed/OP_SET_SPEED does nothing for live vector driving — that was
+// the "changing speed does nothing, always slow" bug). Persisted so it survives a reload (it used to
+// reset to 60 every time). Set through setDriveSpeed() so every speed slider stays in sync.
+let driveSpeed=Math.max(1,Math.min(100,+localStorage.getItem('ebo_speed')||50)), moveNode=null, moveTimer=null;
+function setDriveSpeed(v){
+  driveSpeed=Math.max(1,Math.min(100,+v||50));
+  try{localStorage.setItem('ebo_speed',driveSpeed);}catch(e){}
+  document.querySelectorAll('#fs-mspd,#d-mspd').forEach(el=>{ if(el) el.value=driveSpeed; });
+  const a=document.getElementById('fs-mspd-v'); if(a) a.textContent=driveSpeed;
+}
 const pressed=new Set();          // currently-held directions (keyboard and/or D-pad)
 function sendVec(node,ly,rx,hold,buttons){
   fetch(B+'/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -1330,8 +1343,6 @@ function openFsSettings(){
   const d=document.getElementById('fsopts'); const r=ROBOTS.find(x=>x.node===fsNode)||{}, st=r.state||{};
   // Driving tab: driving mode, movement speed, collision avoidance
   document.getElementById('fs-dm').innerHTML=opt(DM, st.move_mode);
-  document.getElementById('fs-mspd').value=st.speed??50;
-  document.getElementById('fs-mspd-v').textContent=st.speed??'—';
   document.getElementById('fs-avoid').checked = st.avoid_obstacle==='true';
   // Camera tab: night vision, video quality
   document.getElementById('fs-nv').innerHTML=opt(NV, st.night_vision);
@@ -1342,9 +1353,10 @@ function openFsSettings(){
   document.getElementById('fs-svol-v').textContent=sv??'—';
   document.getElementById('fs-cvol').value=st.talkback_volume??50;
   document.getElementById('fs-cvol-v').textContent=st.talkback_volume??'—';
+  // Driving tab: the speed slider reflects the persisted manual-driving speed
+  document.getElementById('fs-mspd').value=driveSpeed;
+  document.getElementById('fs-mspd-v').textContent=driveSpeed;
   // Controls tab: our joystick config
-  document.getElementById('fs-spd-v').textContent=driveSpeed;
-  d.querySelector('#fs-spd').value=driveSpeed;
   document.getElementById('fs-ctrl').value=fsCtrlMode;
   document.getElementById('fs-swap').checked=fsDualSwap;
   document.getElementById('fs-joyside').value=fsJoySide;
@@ -1594,7 +1606,7 @@ async function playLive(v, node, o){
         localStorage.setItem('ebo_transport','webrtc');
         if(o.stats) _fsWatchStats(v, pc); else badge('WebRTC','webrtc');
         const cur=(ROBOTS.find(x=>x.node===node)||{}).state||{};
-        if(o.raiseQuality && cur.video_quality!=='High'){ bg(node,'video_quality/set','High'); }
+        if(o.raiseQuality && cur.video_quality!==DRIVE_VQ){ bg(node,'video_quality/set',DRIVE_VQ); }
         pc.addEventListener('connectionstatechange',()=>{
           if((pc.connectionState==='failed'||pc.connectionState==='disconnected') && alive() && v._pc===pc){
             bg(node,'camera/set','on'); setTimeout(()=>{ if(alive()&&v._pc===pc) playLive(v,node,o); },800);
@@ -1666,7 +1678,7 @@ function enterFS(node){
   // Which quality we can afford depends on the transport that will actually be used — and the URL
   // is a bad predictor (opening HA through your own domain looks "remote" even on the LAN). So we
   // remember what worked LAST time and confirm it below once the connection is really up.
-  const wantVQ = (localStorage.getItem('ebo_transport')==='webrtc') ? 'High' : 'Low';
+  const wantVQ = (localStorage.getItem('ebo_transport')==='webrtc') ? DRIVE_VQ : 'Low';
   if(_driveVQ !== wantVQ) bg(node,'video_quality/set',wantVQ);
   setTimeout(()=>fsPlay(node),400);                 // give the camera a moment, then play
   if(fs.requestFullscreen) fs.requestFullscreen().then(()=>fs.focus()).catch(()=>{});
@@ -1767,8 +1779,8 @@ function detailView(r){
     </div>
     <div class="sec"><h4>Driving</h4>
       <label>Driving mode</label><select onchange="cmd('${r.node}','move_mode/set',this.value)">${opt(DM,st.move_mode)}</select>
-      <label>Movement speed (${st.speed??'—'})</label>
-      <input type="range" min="1" max="100" value="${st.speed??50}" onchange="cmd('${r.node}','speed/set',this.value)">
+      <label>Movement speed (this is how fast it drives)</label>
+      <input id="d-mspd" type="range" min="1" max="100" value="${driveSpeed}" oninput="setDriveSpeed(this.value)" onchange="setDriveSpeed(this.value);cmd('${r.node}','speed/set',this.value)">
       <label class="tgl"><span>Collision avoidance</span>
         <input type="checkbox" ${st.avoid_obstacle==='true'?'checked':''} onchange="cmd('${r.node}','avoid_obstacle/set',this.checked?'on':'off')"></label>
     </div>

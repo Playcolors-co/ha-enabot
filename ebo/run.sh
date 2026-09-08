@@ -55,6 +55,7 @@ export EBO_VIDEO_MAX_HEIGHT="$(pget video_max_height 720)"
 export EBO_VIDEO_FPS="$(pget video_fps 20)"
 export EBO_VIDEO_BITRATE="$(pget video_bitrate 2500)"
 export EBO_VIDEO_PRESET="$(pget video_preset ultrafast)"
+export EBO_VIDEO_WALLCLOCK="$(pbool video_wallclock false)"
 # Native-only: never publish HA entity discovery. The internal MQTT bus (localhost) is just glue
 # between the bridges and the panel; Home Assistant gets everything from the companion integration.
 export EBO_EXPOSE_MQTT=0
@@ -252,7 +253,11 @@ run_robot() {
       echo "[add-on] robot ${id:-single} crashed ${crashes}× with A/V — control only."
       v=0; a=0; crashes=0
     fi
-    echo "[add-on] bridge (${id:-single}) exited (rc=${rc}), restarting in 15s…"
+    if [ "$rc" -ge 128 ]; then
+      echo "[add-on] bridge (${id:-single}) exited (rc=${rc} = signal $((rc-128)) — likely a native SDK crash; see /data/ebo_faults.log for the Python stack), restarting in 15s…"
+    else
+      echo "[add-on] bridge (${id:-single}) exited (rc=${rc}), restarting in 15s…"
+    fi
     sleep 15 & wait $! || true
   done
 }
