@@ -1,5 +1,5 @@
 name: EBO for Home Assistant (unofficial, beta)
-version: "0.26.103"
+version: "0.26.104"
 slug: ebo
 description: Unofficial, free community add-on to manage Enabot EBO robots in Home Assistant (panel, camera, entities). Not affiliated with Enabot.
 url: https://github.com/Playcolors-co/ha-enabot
@@ -76,6 +76,11 @@ options:
   video_fps: 20
   video_bitrate: 2500
   video_preset: ultrafast
+  # Timestamp encoded frames by real arrival time (wallclock) instead of a fixed frame cadence.
+  # ON = the video can't drift behind reality when the encoder falls behind (it drops fps instead of
+  # building up delay). Experimental; leave OFF unless you see the live video lag further and further
+  # behind your driving.
+  video_wallclock: false
   audio_codec: "8"
   # Minutes of inactivity after which the add-on leaves the robot's session so it can fall asleep
   # (the ZZ eyes), like closing the official app. 0 = never sleep while the add-on runs.
@@ -101,6 +106,7 @@ schema:
   video_fps: int
   video_bitrate: int
   video_preset: list(ultrafast|superfast|veryfast|faster|fast)?
+  video_wallclock: bool?
   audio_codec: list(auto|0|8|9)?
   # let the robot sleep after N minutes with no commands (0 = never)
   standby_after_minutes: int

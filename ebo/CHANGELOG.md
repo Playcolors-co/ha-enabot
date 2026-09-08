@@ -1,5 +1,17 @@
 # Changelog — Enabot integration
 
+## 0.26.104 — the drive video no longer drifts behind your steering
+- **The live video used to fall further and further behind while driving.** On a 2-core host the
+  High-quality re-encode (2304×1296 → 720p) can't keep up under motion, and frames that got dropped
+  were still timestamped at a fixed 25 fps — so the picture's clock ran slower than real time and the
+  delay grew without bound. Two fixes:
+  - **Driving now caps the robot's source to Medium** (watching, not driving, is untouched and still
+    uses full quality), so the encoder stays within budget and doesn't fall behind in the first place.
+  - **New `video_wallclock` option (advanced, default off):** timestamps encoded frames by real
+    arrival time, so if the encoder ever does fall behind the video simply drops fps instead of
+    building up delay. Turn it on if you still see the picture lag behind your driving.
+- No change to plain watching, and both are safe defaults.
+
 ## 0.26.103 — the speed slider actually changes the speed, and controls survive a cold wake
 - **"Movement speed" now really drives the robot faster or slower.** Manual driving goes at the
   joystick vector's magnitude, and that was fixed at 60 — the speed slider only set a separate value

@@ -55,6 +55,7 @@ export EBO_VIDEO_MAX_HEIGHT="$(pget video_max_height 720)"
 export EBO_VIDEO_FPS="$(pget video_fps 20)"
 export EBO_VIDEO_BITRATE="$(pget video_bitrate 2500)"
 export EBO_VIDEO_PRESET="$(pget video_preset ultrafast)"
+export EBO_VIDEO_WALLCLOCK="$(pbool video_wallclock false)"
 # Native-only: never publish HA entity discovery. The internal MQTT bus (localhost) is just glue
 # between the bridges and the panel; Home Assistant gets everything from the companion integration.
 export EBO_EXPOSE_MQTT=0

@@ -808,6 +808,11 @@ dialog .in{padding:18px}h3{margin:0 0 10px}.note{font-size:12px;color:#8a929a;ma
 <script>
 const B = window.location.pathname.replace(/\/$/,'');
 (function(){ const s=document.createElement('script'); s.src=B+'/hls.min.js'; s.async=true; document.head.appendChild(s); })();  // fluid HLS player
+// Safety net: while DRIVING we cap the robot's source quality so the 2-core re-encode always keeps
+// up — at full High (2304×1296→720p) the encoder falls behind under motion and the video drifts
+// seconds behind your steering. Medium keeps it in budget. Plain watching (not driving) is untouched
+// and still uses whatever quality you pick.
+const DRIVE_VQ='Medium';
 const VQ=["Low","Medium","High"], IS=["Standard","Vivid","Soft"],
       EY=["Dynamic 1","Dynamic 2","Dynamic 3","Dynamic 4","Dynamic 5","Dynamic 6","Clock 1","Clock 2","Custom"],
       DM=["Smooth","Racing"],   // driving mode (app: Driving Mode Smooth/Racing)
@@ -1601,7 +1606,7 @@ async function playLive(v, node, o){
         localStorage.setItem('ebo_transport','webrtc');
         if(o.stats) _fsWatchStats(v, pc); else badge('WebRTC','webrtc');
         const cur=(ROBOTS.find(x=>x.node===node)||{}).state||{};
-        if(o.raiseQuality && cur.video_quality!=='High'){ bg(node,'video_quality/set','High'); }
+        if(o.raiseQuality && cur.video_quality!==DRIVE_VQ){ bg(node,'video_quality/set',DRIVE_VQ); }
         pc.addEventListener('connectionstatechange',()=>{
           if((pc.connectionState==='failed'||pc.connectionState==='disconnected') && alive() && v._pc===pc){
             bg(node,'camera/set','on'); setTimeout(()=>{ if(alive()&&v._pc===pc) playLive(v,node,o); },800);
@@ -1673,7 +1678,7 @@ function enterFS(node){
   // Which quality we can afford depends on the transport that will actually be used — and the URL
   // is a bad predictor (opening HA through your own domain looks "remote" even on the LAN). So we
   // remember what worked LAST time and confirm it below once the connection is really up.
-  const wantVQ = (localStorage.getItem('ebo_transport')==='webrtc') ? 'High' : 'Low';
+  const wantVQ = (localStorage.getItem('ebo_transport')==='webrtc') ? DRIVE_VQ : 'Low';
   if(_driveVQ !== wantVQ) bg(node,'video_quality/set',wantVQ);
   setTimeout(()=>fsPlay(node),400);                 // give the camera a moment, then play
   if(fs.requestFullscreen) fs.requestFullscreen().then(()=>fs.focus()).catch(()=>{});

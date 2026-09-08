@@ -45,6 +45,10 @@ class VideoPipeline(IVideoFrameObserver):
         # downscale to cut CPU on the re-encode (0 = keep the robot's native resolution)
         self.max_h = int(os.environ.get("EBO_VIDEO_MAX_HEIGHT", "720") or "0")
         self.preset = os.environ.get("EBO_VIDEO_PRESET", "ultrafast")
+        # Timestamp mode: wallclock (frames stamped by real arrival time → the presentation clock
+        # tracks reality, so dropping frames lowers fps instead of building up delay) vs the legacy
+        # fixed -framerate cadence (smooth when the encoder keeps up, but drifts behind under drops).
+        self.wallclock = os.environ.get("EBO_VIDEO_WALLCLOCK", "0") == "1"
         # optional audio (listen): 16 kHz mono PCM from the SDK, muxed as AAC (default off)
         self.audio = os.environ.get("EBO_AUDIO", "0") == "1"
         # robot mic is 8 kHz mono (measured on the real app); must match the SDK PCM rate
@@ -171,18 +175,29 @@ class VideoPipeline(IVideoFrameObserver):
                          "-frame_duration", "10"]
             pass_fds = (a_r,)
         _nullout = os.environ.get("EBO_VIDEO_NULLOUT") == "1"   # DIAG: encode to null (isolate mediamtx)
+        if self.wallclock:
+            # WALLCLOCK: stamp each frame by real arrival time. When the encoder falls behind and the
+            # 1-slot buffer drops frames, the presentation clock still tracks reality — you lose fps,
+            # not sync (the legacy cadence below advanced the timeline slower than realtime under
+            # drops, so the video drifted further and further behind your driving). -vsync vfr keeps
+            # DTS strictly monotonic (drops equal/backward PTS) so the RTSP muxer never stalls on a
+            # non-monotonic timestamp — the failure mode the fixed cadence was originally chosen to
+            # avoid.
+            in_ts = ["-use_wallclock_as_timestamps", "1"]
+            out_ts = ["-vsync", "vfr"]
+        else:
+            # Legacy fixed cadence: rawvideo from a pipe isn't throttled by -framerate, it only
+            # assigns even PTS at src_fps. Smooth when the encoder keeps up; drifts under drops.
+            in_ts = ["-framerate", str(self.src_fps)]
+            out_ts = []
         self.ff = subprocess.Popen([
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            # low latency: timestamp frames by arrival (clean monotonic DTS/PTS — fixes the
-            # Clean, MONOTONIC input timestamps from the raw framerate. Do NOT use
-            # -use_wallclock_as_timestamps: under bursty feeding it hands ffmpeg duplicate/
-            # non-monotonic DTS ("124 >= 124") that stall the encoder. rawvideo from a pipe is not
-            # throttled by -framerate — it only assigns even PTS. The robot streams ~25 fps.
             "-fflags", "+nobuffer", "-flags", "+low_delay",
             "-f", "rawvideo", "-pixel_format", "yuv420p",
-            "-video_size", "%dx%d" % (w, h), "-framerate", str(self.src_fps),
+            "-video_size", "%dx%d" % (w, h),
+        ] + in_ts + [
             "-i", "pipe:0",
-        ] + audio_in + scale + [
+        ] + audio_in + scale + out_ts + [
             "-c:v", "libx264", "-preset", self.preset, "-tune", "zerolatency",
             "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0", "-bf", "0",
             "-pix_fmt", "yuv420p",
