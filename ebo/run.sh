@@ -176,6 +176,13 @@ fi
 HA_ROOT=""
 for d in /homeassistant /config; do [ -d "$d" ] && { HA_ROOT="$d"; break; }; done
 HA_CC="$HA_ROOT/custom_components"
+# Crash diagnostics: the bridge dumps a Python stack on a native SIGSEGV, but the add-on's private
+# /data isn't reachable from the SSH/terminal add-on. Write those dumps into the HA config dir
+# instead (this mount IS reachable), and surface any dump left in /data by a previous build.
+if [ -n "$HA_ROOT" ]; then
+  export EBO_FAULT_DIR="$HA_ROOT"
+  [ -f /data/ebo_faults.log ] && cp -f /data/ebo_faults.log "$HA_ROOT/ebo_faults_prev.log" 2>/dev/null || true
+fi
 if [ -d /app/ha_integration/custom_components/ebo ] && [ -n "$HA_ROOT" ]; then
   mkdir -p "$HA_CC"
   if cp -r /app/ha_integration/custom_components/ebo "$HA_CC/ebo.tmp" 2>/dev/null; then
