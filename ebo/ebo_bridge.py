@@ -26,6 +26,7 @@ import subprocess
 import sys
 import faulthandler
 import queue
+import tempfile
 import threading
 import time
 
@@ -2164,7 +2165,7 @@ def _enable_fault_logging():
         faulthandler.enable(all_threads=True)          # fallback target: stderr
     except Exception:
         pass
-    for d in (os.environ.get("EBO_DATA_DIR", "/data"), "/tmp"):
+    for d in (os.environ.get("EBO_DATA_DIR", "/data"), tempfile.gettempdir()):
         try:
             _fault_fp = open(os.path.join(d, "ebo_faults.log"), "a", buffering=1)
             _fault_fp.write("=== bridge start %s pid=%d ===\n"
