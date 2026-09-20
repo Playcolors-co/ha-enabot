@@ -1,5 +1,14 @@
 # Changelog — Enabot integration
 
+## 0.26.107 — a ready-made key extractor for current app builds
+- **New `tools/extract_keys.js`** (Frida) reads the two app keys from *your own* running EBO HOME app
+  at runtime and prints them. On current builds the keys are deobfuscated inside `libeboSignature.so`
+  and written back into Java fields (`bodyEncryptKeyS2` = `payload_key`, `headerAccessKeySecret` =
+  `sign_key`); the script reads those fields after the loader runs, so you don't have to reverse the
+  `.so`. It gets BOTH keys — you can skip jadx on recent builds. See `tools/README.md`.
+- `docs/GET-APP-KEYS.md` updated to point at the script and explain the runtime-read approach.
+- As always the keys are never shipped — the tool extracts your own; don't share the printed values.
+
 ## 0.26.106 — fix the mid-drive crash (Agora SDK thread-safety)
 - **The bridge was crashing with a segfault while driving, and you'd lose video and control**
   (the robot even kept coasting, because its watchdog died with the process). The captured stacks
