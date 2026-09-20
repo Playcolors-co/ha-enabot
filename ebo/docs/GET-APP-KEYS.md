@@ -79,13 +79,20 @@ second 16-char constant right next to it used to build the signature — on thos
 ### 3b — `sign_key` (recent builds: it's in the native library)
 
 On current EBO HOME versions the signing key lives in the native library **`libeboSignature.so`**, not
-in the Java code, so jadx won't show it. Two ways to get it, in order of ease:
+in the Java code, so jadx won't show it. The `.so` **deobfuscates** the keys at runtime
+(`loadSignatureResources`) and writes them back into Java fields — so the raw 16-char strings you see
+in the `.so`'s `.rodata` are *pre-transform* and won't work as-is. Read the resolved values instead:
 
-- **Frida (easiest).** With Frida attached to the running app, hook the app's signing routine and read
-  the value it uses (the app builds the `x-ebo-sign` header from it). This reads the key from **your
-  own** running app; nothing leaves your device.
-- **Reverse the `.so`.** Unzip the APK, take `lib/arm64-v8a/libeboSignature.so`, and open it in a
-  disassembler (Ghidra/IDA) to recover the constant.
+- **Ready-made script (easiest).** Run [`../tools/extract_keys.js`](../tools/extract_keys.js) with
+  Frida against your own app — it reads the deobfuscated `bodyEncryptKeyS2` (`payload_key`) and
+  `headerAccessKeySecret` (`sign_key`) fields right after the loader fills them and prints both. See
+  [`../tools/README.md`](../tools/README.md). It gets **both** keys, so on recent builds you can skip
+  jadx entirely.
+- **By hand with Frida.** `Java.perform` → `Java.use('<...>.SignatureHelper')` → read the
+  `bodyEncryptKeyS2` / `headerAccessKeySecret` fields *after* `loadSignatureResources()` has run
+  (trigger it by logging in). Nothing leaves your device.
+- **Reverse the `.so`.** Last resort: unzip the APK, take `lib/arm64-v8a/libeboSignature.so`, open it
+  in Ghidra/IDA and reproduce the `loadSignatureResources` transform. Harder than the runtime read.
 
 > Not sure you've got the right one? The `sign_key` is what builds the `x-ebo-sign` request signature
 > (an HMAC-SHA256). If the add-on logs a **signature error** on login, the `sign_key` is the one to

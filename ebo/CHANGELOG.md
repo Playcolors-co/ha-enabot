@@ -1,5 +1,32 @@
 # Changelog — Enabot integration
 
+## 0.26.107 — a ready-made key extractor for current app builds
+- **New `tools/extract_keys.js`** (Frida) reads the two app keys from *your own* running EBO HOME app
+  at runtime and prints them. On current builds the keys are deobfuscated inside `libeboSignature.so`
+  and written back into Java fields (`bodyEncryptKeyS2` = `payload_key`, `headerAccessKeySecret` =
+  `sign_key`); the script reads those fields after the loader runs, so you don't have to reverse the
+  `.so`. It gets BOTH keys — you can skip jadx on recent builds. See `tools/README.md`.
+- `docs/GET-APP-KEYS.md` updated to point at the script and explain the runtime-read approach.
+- As always the keys are never shipped — the tool extracts your own; don't share the printed values.
+
+## 0.26.106 — fix the mid-drive crash (Agora SDK thread-safety)
+- **The bridge was crashing with a segfault while driving, and you'd lose video and control**
+  (the robot even kept coasting, because its watchdog died with the process). The captured stacks
+  showed the cause: the native Agora SDK is not thread-safe, and a session reconnect/teardown
+  (`connect_agora` / `_force_rejoin` / standby) running on one thread while another thread was
+  publishing a command, pushing audio or nudging a keyframe was a use-after-free → SIGSEGV.
+- **Fix:** every call into the SDK (RTM publish, RTC connect/disconnect, audio publish + PCM push,
+  keyframe requests, observer registration) now goes through a single lock, so a reconnect can never
+  overlap another SDK call. No feature change — just no more crash.
+- Crash dumps now also land in the Home Assistant config dir (`ebo_faults.log`) so any remaining
+  native fault is diagnosable.
+
+## 0.26.105 — surface the crash stack where it can actually be read
+- The bridge already dumped a Python stack on a native SIGSEGV, but into the add-on's private
+  `/data`, which the SSH/Terminal add-on can't reach. Those dumps now go to the Home Assistant
+  config dir (`ebo_faults.log`), and any dump left in `/data` by a previous build is surfaced there
+  once as `ebo_faults_prev.log`. Diagnostics only — no runtime change.
+
 ## 0.26.104 — the drive video no longer drifts behind your steering
 - **The live video used to fall further and further behind while driving.** On a 2-core host the
   High-quality re-encode (2304×1296 → 720p) can't keep up under motion, and frames that got dropped
